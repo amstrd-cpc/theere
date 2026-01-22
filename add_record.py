@@ -26,10 +26,19 @@ from woocommerce_client import (
 
 load_dotenv()
 DISCOGS_TOKEN = os.getenv("DISCOGS_TOKEN")
-if not DISCOGS_TOKEN:
-    raise ValueError("DISCOGS_TOKEN must be set in environment variables.")
+_discogs_client = None
 
-d = discogs_client.Client("RecordStoreApp/1.0", user_token=DISCOGS_TOKEN)
+
+def get_discogs_client():
+    global _discogs_client
+    if _discogs_client:
+        return _discogs_client
+    if not DISCOGS_TOKEN:
+        return None
+    _discogs_client = discogs_client.Client(
+        "RecordStoreApp/1.0", user_token=DISCOGS_TOKEN
+    )
+    return _discogs_client
 
 (
     PRODUCT_TYPE,
@@ -87,8 +96,13 @@ def save_to_inventory(row):
 
 
 def fetch_price_suggestions(release_id):
+    client = get_discogs_client()
+    if not client:
+        return {}
     try:
-        return d._get(f"https://api.discogs.com/marketplace/price_suggestions/{release_id}")
+        return client._get(
+            f"https://api.discogs.com/marketplace/price_suggestions/{release_id}"
+        )
     except Exception:
         return {}
 
@@ -173,6 +187,11 @@ async def handle_product_type(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not get_discogs_client():
+        await update.message.reply_text(
+            "❌ Discogs token is missing. Set DISCOGS_TOKEN to add records."
+        )
+        return ConversationHandler.END
     query = update.message.text.strip()
     context.user_data["query"] = query
     context.user_data["page"] = 1
@@ -180,10 +199,22 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = get_discogs_client()
+    if not client:
+        await update.effective_message.reply_text(
+            "❌ Discogs token is missing. Set DISCOGS_TOKEN to add records."
+        )
+        return ConversationHandler.END
     page = context.user_data["page"]
     query = context.user_data["query"]
-    results = list(d.search(query, type="release").page(page))
+    results = list(client.search(query, type="release").page(page))
     context.user_data["results"] = results
+
+    if not results:
+        await update.effective_message.reply_text(
+            "❌ No releases found. Try another search."
+        )
+        return SEARCH_INPUT
 
     buttons = [
         [
@@ -225,7 +256,13 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     idx = int(update.callback_query.data.split("_")[1])
-    selected = context.user_data["results"][idx]
+    results = context.user_data.get("results") or []
+    if idx < 0 or idx >= len(results):
+        await update.callback_query.edit_message_text(
+            "❌ That selection is no longer available. Please search again."
+        )
+        return SEARCH_INPUT
+    selected = results[idx]
     context.user_data["release"] = selected
     await update.callback_query.edit_message_text(
         f"Selected: {selected.title}\n\nNow choose vinyl condition:",
@@ -472,7 +509,10 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
     # Always stop Telegram "loading…" instantly and show progress text
     if q:
         await q.answer()
-        status_msg = await q.edit_message_text("⏳ Saving…")
+        try:
+            status_msg = await q.edit_message_text("⏳ Saving…")
+        except Exception:
+            status_msg = await update.effective_chat.send_message("⏳ Saving…")
     else:
         status_msg = await update.message.reply_text("⏳ Saving…")
 
@@ -515,8 +555,8 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
 
             row = [
                 str(release.title),
-                safe_join_list(release.genres),
-                safe_join_list(release.styles),
+                safe_join_list(getattr(release, "genres", None)),
+                safe_join_list(getattr(release, "styles", None)),
                 safe_get_labels(release),
                 safe_get_format(release),
                 str(cond),
@@ -530,8 +570,8 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
             item = {
                 "id": new_id,
                 "artist_album": str(release.title),
-                "genre": safe_join_list(release.genres),
-                "style": safe_join_list(release.styles),
+                "genre": safe_join_list(getattr(release, "genres", None)),
+                "style": safe_join_list(getattr(release, "styles", None)),
                 "label": safe_get_labels(release),
                 "format": safe_get_format(release),
                 "condition": str(cond),
