@@ -1,0 +1,77 @@
+# Core Telegram Bot Framework
+python-telegram-bot[job-queue]
+
+# Discord API Client for Discogs integration
+discogs-client
+
+# Environment Variables Management
+python-dotenv
+
+# Database and Data Processing
+pandas
+openpyxl
+xlrd
+
+# HTTP Requests (for API calls)
+requests
+urllib3
+
+# Date and Time Utilities
+python-dateutil
+
+# JSON and Data Serialization
+jsonschema
+
+# Async Support
+asyncio-mqtt
+aiohttp
+
+# Logging and Debugging
+colorama
+
+# Data Validation
+pydantic
+
+# Timezone Support
+pytz
+
+# File System Operations
+pathlib2
+
+# Text Processing
+unidecode
+
+# Error Handling and Retry Logic
+tenacity
+
+# Memory and Performance
+psutil
+
+# Optional: Web Framework (if you plan to add web interface)
+flask
+flask-cors
+
+# Optional: Additional Excel Support
+xlsxwriter
+
+# Optional: PDF Generation (for reports)
+reportlab
+
+# Optional: Image Processing (if handling album covers)
+Pillow
+
+# Optional: Barcode/QR Code Generation
+qrcode
+
+# Optional: Advanced Analytics
+numpy
+matplotlib
+
+# Development and Testing Dependencies
+pytest
+pytest-asyncio
+black
+flake8
+
+# Security
+cryptography
