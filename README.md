@@ -1,4 +1,4 @@
-# Record Store Bot
+# Theere
 
 A password-protected Telegram assistant for running a vinyl shop from your phone. Add and edit inventory with Discogs-powered metadata, process multi-item sales, generate Excel reports, and keep WooCommerce product stock in sync automatically.
 
