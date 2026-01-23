@@ -485,6 +485,11 @@ async def handle_generic_image(update: Update, context: ContextTypes.DEFAULT_TYP
 
     context.user_data["generic_image_url"] = image_url
 
+    await prompt_supplier(update, context)
+    return ASK_SUPPLIER
+
+
+async def prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     suppliers = get_suppliers()
     if suppliers:
         buttons = []
@@ -503,8 +508,6 @@ async def handle_generic_image(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("Enter supplier name:")
 
-    return ASK_SUPPLIER
-
 
 # ---------- Supplier + final save ----------
 
@@ -520,7 +523,9 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
     """
 
     q = update.callback_query
+    context.chat_data["_skip_orphan_supplier_once"] = True
 
+    
     # Always stop Telegram "loading…" instantly and show progress text
     if q:
         await q.answer()
@@ -751,6 +756,13 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
+async def handle_supplier_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return ASK_SUPPLIER
+    await q.answer()
+    await q.edit_message_text("Enter supplier name:")
+    return ASK_SUPPLIER
 
 
 async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -764,6 +776,9 @@ async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT
     """
     q = update.callback_query
     if not q:
+        return
+
+    if context.chat_data.pop("_skip_orphan_supplier_once", None):
         return
 
     try:

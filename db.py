@@ -18,8 +18,11 @@ from typing import Any, Iterable
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Prefer the optimized DB name, but allow an override for deployments.
-DB_FILE = os.getenv("RECORDSTORE_DB_FILE") or os.path.join(BASE_DIR, "clime_db.db")
-
+DB_FILE = (
+    os.getenv("RECORDSTORE_DB_FILE")
+    or os.getenv("DB_PATH")
+    or os.path.join(BASE_DIR, "clime_db.db")
+)
 
 def _apply_connection_pragmas(conn: sqlite3.Connection) -> None:
     """Pragmas that must be set per-connection."""
