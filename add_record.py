@@ -508,7 +508,9 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
     """
 
     q = update.callback_query
+    context.chat_data["_skip_orphan_supplier_once"] = True
 
+    
     # Always stop Telegram "loading…" instantly and show progress text
     if q:
         await q.answer()
@@ -738,6 +740,9 @@ async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT
     """
     q = update.callback_query
     if not q:
+        return
+
+    if context.chat_data.pop("_skip_orphan_supplier_once", None):
         return
 
     try:
