@@ -373,7 +373,24 @@ async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TY
             # We reuse the same generic image handler/state for records as for gear
             return GENERIC_IMAGE
 
-    await prompt_supplier(update, context)
+    suppliers = get_suppliers()
+    if suppliers:
+        buttons = []
+        for row in suppliers:
+            try:
+                sid = row["id"]
+                name = row["name"]
+            except (TypeError, KeyError, IndexError):
+                sid, name = row
+            buttons.append([InlineKeyboardButton(str(name), callback_data=f"sup_{sid}")])
+        buttons.append([InlineKeyboardButton("➕ Other / Enter name", callback_data="sup_other")])
+        await update.message.reply_text(
+            "Select supplier (or tap “Other / Enter name” to type one):",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+    else:
+        await update.message.reply_text("Enter supplier name:")
+
     return ASK_SUPPLIER
 
 
@@ -478,18 +495,14 @@ async def prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         buttons = []
         for row in suppliers:
             try:
-                supplier_id = row["id"]
-                supplier_name = row["name"]
-            except Exception:
-                supplier_id, supplier_name = row
-            buttons.append(
-                [InlineKeyboardButton(supplier_name, callback_data=f"sup_{supplier_id}")]
-            )
-        buttons.append(
-            [InlineKeyboardButton("➕ Other supplier", callback_data="sup_other")]
-        )
+                sid = row["id"]
+                name = row["name"]
+            except (TypeError, KeyError, IndexError):
+                sid, name = row
+            buttons.append([InlineKeyboardButton(str(name), callback_data=f"sup_{sid}")])
+        buttons.append([InlineKeyboardButton("➕ Other / Enter name", callback_data="sup_other")])
         await update.message.reply_text(
-            "Select a supplier or type a new name:",
+            "Select supplier (or tap “Other / Enter name” to type one):",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     else:
@@ -525,13 +538,24 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
 
     try:
         # --- Supplier selection / creation ---
+        supplier_name = None
+        supplier_id = None
         if q:
-            supplier_id = int(q.data.split("_", 1)[1])
-            supplier_name = None
+            raw_choice = (q.data or "").strip()
+            if raw_choice == "sup_other":
+                context.user_data["supplier_needs_name"] = True
+                await status_msg.edit_text("Enter supplier name:")
+                return ASK_SUPPLIER
+            try:
+                supplier_id = int(raw_choice.split("_", 1)[1])
+            except (ValueError, IndexError):
+                context.user_data["supplier_needs_name"] = True
+                await status_msg.edit_text("Enter supplier name:")
+                return ASK_SUPPLIER
         else:
             supplier_name = (update.message.text or "").strip()
             if not supplier_name:
-                await status_msg.edit_text("❌ Supplier name cannot be empty. Enter a supplier name:")
+                await status_msg.edit_text("Supplier name cannot be empty. Enter supplier name:")
                 return ASK_SUPPLIER
             supplier_id = get_or_create_supplier(supplier_name)
 
@@ -826,8 +850,9 @@ def start_add_flow():
                 )
             ],
             ASK_SUPPLIER: [
-                CallbackQueryHandler(handle_supplier_other, pattern=r"^sup_other$"),
-                CallbackQueryHandler(handle_supplier_input, pattern=r"^sup_\d+"),
+                CallbackQueryHandler(
+                    handle_supplier_input, pattern=r"^sup_(\d+|other)$"
+                ),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_supplier_input),
             ],
         },

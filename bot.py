@@ -611,7 +611,7 @@ def main():
     application.add_handler(start_add_flow())
     # Fallback: catch stale supplier inline buttons (e.g., clicked after /add ended or bot restart)
     application.add_handler(
-        CallbackQueryHandler(orphan_supplier_callback, pattern=r"^sup_\d+$"),
+        CallbackQueryHandler(orphan_supplier_callback, pattern=r"^sup_(\d+|other)$"),
         group=1,
     )
     application.add_handler(start_sell_flow())
