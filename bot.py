@@ -18,6 +18,9 @@ import requests
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, JobQueue
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Import your existing modules
 from auth import auth_manager, require_auth, create_auth_handlers, check_auth_middleware
@@ -30,9 +33,7 @@ import reports
 from woocommerce_client import WooNotConfigured, fetch_orders, is_configured
 from woocommerce_sync import sync_inventory_to_woo
 from config import ADMIN_CHAT_ID, BOT_TOKEN
-from dotenv import load_dotenv
 
-load_dotenv()
 
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
@@ -609,7 +610,10 @@ def main():
     # Add conversation handlers (these have their own auth checks)
     application.add_handler(start_add_flow())
     # Fallback: catch stale supplier inline buttons (e.g., clicked after /add ended or bot restart)
-    application.add_handler(CallbackQueryHandler(orphan_supplier_callback, pattern=r"^sup_\d+$"))
+    application.add_handler(
+        CallbackQueryHandler(orphan_supplier_callback, pattern=r"^sup_\d+$"),
+        group=1,
+    )
     application.add_handler(start_sell_flow())
     application.add_handler(create_inventory_conversation())
     register_inventory_callbacks(application)

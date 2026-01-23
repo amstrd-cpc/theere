@@ -17,6 +17,9 @@ from telegram.ext import (
     filters,
 )
 
+load_dotenv()
+
+
 from db import get_db, get_suppliers, get_or_create_supplier
 from woocommerce_client import (
     is_configured,
@@ -24,7 +27,7 @@ from woocommerce_client import (
     upload_image_from_bytes,
 )
 
-load_dotenv()
+
 DISCOGS_TOKEN = os.getenv("DISCOGS_TOKEN")
 _discogs_client = None
 
