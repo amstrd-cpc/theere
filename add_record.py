@@ -513,7 +513,6 @@ async def prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info("SUPPLIER STEP ENTER: has_callback=%s data=%s user_data_keys=%s", bool(update.callback_query), getattr(getattr(update, "callback_query", None), "data", None), list(getattr(context, "user_data", {}).keys()))
     """Finalize add flow: save to DB and optionally create a Woo product.
 
     Why this exists:
@@ -521,6 +520,12 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
     - Woo calls are blocking; if Woo is slow, the bot looks frozen.
     - If an exception happens, you weren't guaranteed to send a message back.
     """
+    logger.info(
+        "SUPPLIER STEP ENTER: has_callback=%s data=%s user_data_keys=%s",
+        bool(update.callback_query),
+        getattr(getattr(update, "callback_query", None), "data", None),
+        list(getattr(context, "user_data", {}).keys()),
+    )
 
     q = update.callback_query
     context.chat_data["_skip_orphan_supplier_once"] = True
@@ -536,6 +541,7 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         status_msg = await update.message.reply_text("⏳ Saving…")
 
+    should_cleanup = True
     try:
         # --- Supplier selection / creation ---
         supplier_name = None
@@ -545,18 +551,22 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
             if raw_choice == "sup_other":
                 context.user_data["supplier_needs_name"] = True
                 await status_msg.edit_text("Enter supplier name:")
+                should_cleanup = False
                 return ASK_SUPPLIER
             try:
                 supplier_id = int(raw_choice.split("_", 1)[1])
             except (ValueError, IndexError):
                 context.user_data["supplier_needs_name"] = True
                 await status_msg.edit_text("Enter supplier name:")
+                should_cleanup = False
                 return ASK_SUPPLIER
         else:
             supplier_name = (update.message.text or "").strip()
             if not supplier_name:
                 await status_msg.edit_text("Supplier name cannot be empty. Enter supplier name:")
+                should_cleanup = False
                 return ASK_SUPPLIER
+            context.user_data.pop("supplier_needs_name", None)
             supplier_id = get_or_create_supplier(supplier_name)
 
         ptype = (context.user_data.get("product_type") or "record").strip().lower()
@@ -749,9 +759,10 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
             await update.effective_message.reply_text(f"❌ Error in supplier step: {e}")
 
     finally:
-        # mark flow inactive (even if we clear user_data)
-        context.user_data.pop("_add_flow_active", None)
-        context.user_data.clear()
+        if should_cleanup:
+            # mark flow inactive (even if we clear user_data)
+            context.user_data.pop("_add_flow_active", None)
+            context.user_data.clear()
 
     return ConversationHandler.END
 
