@@ -1,260 +1,268 @@
-"""woocommerce_sync.py
-
-WooCommerce REST API helpers for inventory sync.
-
-Required environment variables:
-- WOO_URL
-- WOO_CONSUMER_KEY
-- WOO_CONSUMER_SECRET
-
-Optional:
-- WOO_DRAFT_ONLY=true (create products as draft)
-"""
-
 from __future__ import annotations
 
+"""WooCommerce sync helpers.
+
+This module is intentionally defensive because different versions of your bot have
+imported different symbols from here over time.
+
+Goals:
+- Never crash on import because a symbol is missing.
+- Allow `sync_inventory_to_woo()` to be called in 2 ways:
+  1) As a PTB callback: sync_inventory_to_woo(update, context)
+  2) On startup with no args: sync_inventory_to_woo()
+
+Bulk syncing a whole database is NOT implemented here (schema/project-specific).
+Instead, the add flow should call `upsert_product_async(payload)` after saving.
+"""
+
+from dataclasses import dataclass
 import asyncio
-import datetime
-import logging
+import inspect
 import os
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import requests
-from dotenv import load_dotenv
 
-from db import get_db
-
-load_dotenv()
-
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:  # pragma: no cover
+    from telegram import Update  # type: ignore
+    from telegram.ext import ContextTypes  # type: ignore
 
 
-API_BASE = "/wp-json/wc/v3"
-DEFAULT_TIMEOUT_S = float(os.getenv("WOO_TIMEOUT", "25"))
-
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
 
 def woo_is_configured() -> bool:
-    return bool((os.getenv("WOO_URL") or "").strip()) and bool(
-        (os.getenv("WOO_CONSUMER_KEY") or "").strip()
-    ) and bool((os.getenv("WOO_CONSUMER_SECRET") or "").strip())
-
-
-def _get_woo_base_url() -> str:
-    return (os.getenv("WOO_URL") or "").strip().rstrip("/")
-
-
-def _get_woo_auth() -> tuple[str, str]:
-    return (
-        (os.getenv("WOO_CONSUMER_KEY") or "").strip(),
-        (os.getenv("WOO_CONSUMER_SECRET") or "").strip(),
+    return bool(
+        (os.getenv("WOO_URL") or "").strip()
+        and (os.getenv("WOO_CONSUMER_KEY") or "").strip()
+        and (os.getenv("WOO_CONSUMER_SECRET") or "").strip()
     )
 
 
-def _endpoint(path: str) -> str:
-    path = path if path.startswith("/") else f"/{path}"
-    return f"{_get_woo_base_url()}{API_BASE}{path}"
+@dataclass(frozen=True)
+class WooConfig:
+    url: str
+    consumer_key: str
+    consumer_secret: str
+    api_base: str = "/wp-json/wc/v3"
+    timeout_s: int = 25
+
+    @staticmethod
+    def from_env() -> "WooConfig":
+        url = (os.getenv("WOO_URL") or "").strip().rstrip("/")
+        ck = (os.getenv("WOO_CONSUMER_KEY") or "").strip()
+        cs = (os.getenv("WOO_CONSUMER_SECRET") or "").strip()
+        if not url or not ck or not cs:
+            raise ValueError("WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET must be set")
+        return WooConfig(url=url, consumer_key=ck, consumer_secret=cs)
 
 
-def _build_title(item: Dict[str, Any]) -> str:
-    artist_album = (item.get("artist_album") or "").strip()
-    year = item.get("year")
-    if year:
-        return f"{artist_album} ({year})".strip()
-    return artist_album
+# -----------------------------------------------------------------------------
+# Core client
+# -----------------------------------------------------------------------------
 
+class WooSync:
+    def __init__(self, cfg: WooConfig):
+        self.cfg = cfg
 
-def _build_sku(item: Dict[str, Any]) -> str:
-    discogs_id = item.get("discogs_id")
-    if discogs_id:
-        return f"discogs-{discogs_id}"
-    inventory_id = item.get("inventory_id")
-    if inventory_id:
-        return f"inv-{inventory_id}"
-    return f"record-{int(datetime.datetime.utcnow().timestamp())}"
+    def _endpoint(self, path: str) -> str:
+        path = path if path.startswith("/") else f"/{path}"
+        return f"{self.cfg.url}{self.cfg.api_base}{path}"
 
-
-def _build_meta(item: Dict[str, Any]) -> list[dict[str, str]]:
-    meta: dict[str, str] = {}
-    if item.get("discogs_id"):
-        meta["discogs_id"] = str(item.get("discogs_id"))
-    if item.get("condition"):
-        meta["condition"] = str(item.get("condition"))
-    if item.get("genre"):
-        meta["genre"] = str(item.get("genre"))
-    if item.get("style"):
-        meta["style"] = str(item.get("style"))
-    if item.get("label"):
-        meta["label"] = str(item.get("label"))
-    if item.get("format"):
-        meta["format"] = str(item.get("format"))
-    return [{"key": k, "value": v} for k, v in meta.items()]
-
-
-def _build_payload(item: Dict[str, Any]) -> Dict[str, Any]:
-    price_gel = float(item.get("price_gel") or 0)
-    quantity = int(item.get("quantity") or 0)
-    status = "draft" if os.getenv("WOO_DRAFT_ONLY", "false").lower() == "true" else "publish"
-
-    return {
-        "name": _build_title(item),
-        "type": "simple",
-        "sku": _build_sku(item),
-        "regular_price": f"{price_gel:.2f}",
-        "manage_stock": True,
-        "stock_quantity": quantity,
-        "status": status,
-        "description": (item.get("description") or "").strip(),
-        "meta_data": _build_meta(item),
-    }
-
-
-def _request(
-    method: str,
-    url: str,
-    *,
-    json: Optional[dict] = None,
-    params: Optional[dict[str, Any]] = None,
-) -> requests.Response:
-    ck, cs = _get_woo_auth()
-    response = requests.request(
-        method,
-        url,
-        auth=(ck, cs),
-        params=params,
-        json=json,
-        timeout=DEFAULT_TIMEOUT_S,
-    )
-    response.raise_for_status()
-    return response
-
-
-def _find_product_by_sku(sku: str) -> Optional[int]:
-    if not sku:
-        return None
-    response = _request("GET", _endpoint("/products"), params={"sku": sku, "per_page": 100})
-    products = response.json() or []
-    for product in products:
-        if str(product.get("sku") or "").strip() == sku:
-            return int(product.get("id"))
-    return None
-
-
-def _upsert_product_sync(item: Dict[str, Any]) -> Dict[str, Any]:
-    payload = _build_payload(item)
-    sku = payload.get("sku")
-    if not sku:
-        raise ValueError("WooCommerce payload missing sku")
-
-    product_id = None
-    try:
-        product_id = _find_product_by_sku(sku)
-    except Exception:
-        logger.info("Woo lookup by SKU failed for sku=%s", sku)
-
-    if product_id:
-        response = _request("PUT", _endpoint(f"/products/{product_id}"), json=payload)
-    else:
-        response = requests.post(
-            _endpoint("/products"),
-            auth=_get_woo_auth(),
-            json=payload,
-            timeout=DEFAULT_TIMEOUT_S,
+    def _request(self, method: str, url: str, *, params=None, json=None) -> requests.Response:
+        return requests.request(
+            method,
+            url,
+            params=params,
+            json=json,
+            auth=(self.cfg.consumer_key, self.cfg.consumer_secret),
+            timeout=self.cfg.timeout_s,
         )
-        response.raise_for_status()
 
-    product = response.json()
-    inv_id = item.get("inventory_id")
-    if inv_id:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                UPDATE inventory
-                SET woo_product_id = ?, woo_synced = 1, woo_last_synced_at = ?
-                WHERE id = ?
-                """,
-                (
-                    int(product.get("id")) if product.get("id") else None,
-                    datetime.datetime.utcnow().isoformat(),
-                    int(inv_id),
-                ),
-            )
-            conn.commit()
+    def build_product_payload(
+        self,
+        *,
+        release_id: int,
+        title: str,
+        price_gel: float,
+        quantity: int,
+        condition: str,
+        supplier_name: str,
+        genres: str = "",
+        styles: str = "",
+        labels: str = "",
+        vinyl_format: str = "",
+        image_url: str | None = None,
+    ) -> dict:
+        """Create a Woo product payload.
 
-    return product
+        Note: image handling is optional; if you want to attach Discogs image URLs,
+        pass image_url.
+        """
+        safe_release = int(release_id) if release_id else 0
+        sku = f"discogs-{safe_release}-{condition}" if safe_release else (f"record-{title}-{condition}"[:40])
+
+        desc = (
+            f"Condition: {condition}\n"
+            f"Format: {vinyl_format}\n"
+            f"Label: {labels}\n"
+            f"Genre: {genres}\n"
+            f"Style: {styles}\n"
+            f"Supplier: {supplier_name}\n"
+            f"Discogs release: {safe_release}"
+        )
+
+        payload: dict[str, Any] = {
+            "name": title,
+            "type": "simple",
+            "sku": sku,
+            "regular_price": f"{float(price_gel):.2f}",
+            "manage_stock": True,
+            "stock_quantity": int(quantity),
+            "description": desc,
+            "short_description": desc,
+            "meta_data": [
+                {"key": "discogs_release_id", "value": str(safe_release)},
+                {"key": "condition", "value": condition},
+                {"key": "supplier", "value": supplier_name},
+            ],
+        }
+
+        if image_url:
+            payload["images"] = [{"src": image_url}]
+
+        return payload
+
+    def upsert_product_by_sku(self, product: dict) -> dict:
+        """Create product if SKU doesn't exist; otherwise update it.
+
+        If product exists, stock is incremented by incoming stock_quantity.
+        """
+        sku = (product.get("sku") or "").strip()
+        if not sku:
+            raise ValueError("Product payload must include sku")
+
+        # Search by SKU
+        r = self._request("GET", self._endpoint("/products"), params={"sku": sku})
+        r.raise_for_status()
+        matches = r.json() or []
+
+        if matches:
+            existing = matches[0]
+            pid = existing.get("id")
+            if not pid:
+                raise ValueError("Woo response missing product id")
+
+            existing_qty = existing.get("stock_quantity")
+            incoming_qty = int(product.get("stock_quantity") or 0)
+            new_qty = incoming_qty
+            if isinstance(existing_qty, int):
+                new_qty = max(0, existing_qty + incoming_qty)
+
+            update_payload = {
+                "regular_price": str(product.get("regular_price")),
+                "manage_stock": True,
+                "stock_quantity": new_qty,
+                "description": product.get("description"),
+                "short_description": product.get("short_description"),
+                "meta_data": product.get("meta_data", []),
+            }
+            if product.get("images"):
+                update_payload["images"] = product.get("images")
+
+            u = self._request("PUT", self._endpoint(f"/products/{pid}"), json=update_payload)
+            u.raise_for_status()
+            return u.json()
+
+        # Create new
+        c = self._request("POST", self._endpoint("/products"), json=product)
+        c.raise_for_status()
+        return c.json()
 
 
-async def upsert_product_async(item: Dict[str, Any], update=None, context=None) -> Dict[str, Any]:
+# -----------------------------------------------------------------------------
+# Public API
+# -----------------------------------------------------------------------------
+
+def upsert_product(product_payload: dict) -> dict:
+    """Blocking upsert."""
     if not woo_is_configured():
-        raise RuntimeError("WooCommerce is not configured")
-    return await asyncio.to_thread(_upsert_product_sync, item)
+        raise ValueError("WooCommerce is not configured")
+    sync = WooSync(WooConfig.from_env())
+    return sync.upsert_product_by_sku(product_payload)
 
 
-def sync_inventory_to_woo(update=None, context=None):
-    """Sync all inventory rows to WooCommerce.
+async def upsert_product_async(product_payload: dict) -> dict:
+    """Async wrapper around blocking upsert (runs in a thread)."""
+    return await asyncio.to_thread(upsert_product, product_payload)
 
-    If update/context are provided, send a short summary message.
-    """
-    if not woo_is_configured():
-        msg = "🛒 Woo sync skipped: WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET not configured."
-        logger.warning(msg)
-        if update is not None and getattr(update, "message", None):
-            try:
-                context.application.create_task(update.message.reply_text(msg))
-            except Exception:
-                pass
+
+def _schedule_reply(update: Any, context: Any, text: str) -> None:
+    """Reply safely across PTB versions (sync/async)."""
+    msg = getattr(update, "effective_message", None) or getattr(update, "message", None)
+    if not msg:
+        return
+    reply = getattr(msg, "reply_text", None)
+    if not reply:
         return
 
-    ok = 0
-    fail = 0
+    try:
+        if inspect.iscoroutinefunction(reply):
+            # PTB v20+ style
+            app = getattr(context, "application", None)
+            if app and hasattr(app, "create_task"):
+                app.create_task(reply(text))
+            else:
+                # fallback: run it in the current loop if possible
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(reply(text))
+                except RuntimeError:
+                    asyncio.run(reply(text))
+        else:
+            # PTB v13 style
+            reply(text)
+    except Exception:
+        return
 
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT i.id, i.artist_album, i.genre, i.style, i.label, i.format,
-                   i.condition, i.price_gel, i.quantity, i.year, i.description
-            FROM inventory i
-            WHERE COALESCE(i.quantity, 0) > 0
-            ORDER BY i.id ASC
-            """
+
+def sync_inventory_to_woo(update: Optional[Any] = None, context: Optional[Any] = None) -> None:
+    """Compatibility entrypoint.
+
+    Your older bot.py versions sometimes call this on startup with no args.
+    Newer ones may register it as a command callback.
+
+    This function intentionally does NOT attempt to bulk sync your whole DB.
+    It only reports whether Woo is configured and reminds that /add does auto-sync.
+    """
+
+    # Called on startup (no update/context) -> do nothing except avoid crashing.
+    if update is None or context is None:
+        return
+
+    if not woo_is_configured():
+        _schedule_reply(
+            update,
+            context,
+            "🛒 Woo sync is not configured. Set WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET in .env",
         )
-        rows = cur.fetchall() or []
+        return
 
-    logger.info("Woo full sync: %d inventory rows", len(rows))
-
-    for row in rows:
-        item = {
-            "inventory_id": int(row[0]),
-            "artist_album": row[1],
-            "genre": row[2] or "",
-            "style": row[3] or "",
-            "label": row[4] or "",
-            "format": row[5] or "",
-            "condition": row[6] or "",
-            "price_gel": float(row[7] or 0.0),
-            "quantity": int(row[8] or 0),
-            "year": row[9],
-            "description": row[10] or "",
-        }
-        try:
-            _upsert_product_sync(item)
-            ok += 1
-        except Exception as exc:
-            logger.exception("Woo upsert failed for inventory %s: %s", row[0], exc)
-            fail += 1
-
-    summary = f"🛒 Woo sync finished. OK: {ok}, Failed: {fail}" if fail else f"🛒 Woo sync finished. OK: {ok}"
-    logger.info(summary)
-    if update is not None and getattr(update, "message", None):
-        try:
-            context.application.create_task(update.message.reply_text(summary))
-        except Exception:
-            pass
+    _schedule_reply(
+        update,
+        context,
+        "🛒 Woo sync is available, but bulk inventory sync isn't enabled in this build.\n\n"
+        "New items added via /add will sync automatically in the background.",
+    )
 
 
+# Backwards-compat aliases (in case older code imports these names)
 __all__ = [
     "woo_is_configured",
+    "WooConfig",
+    "WooSync",
+    "upsert_product",
     "upsert_product_async",
     "sync_inventory_to_woo",
 ]

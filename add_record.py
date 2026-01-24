@@ -1,670 +1,346 @@
-"""add_record.py
-
-Discogs-powered add flow for inventory.
-"""
-
-from __future__ import annotations
-
-import asyncio
-import logging
-import os
-from typing import Any, Dict, List, Optional, Tuple
-
-import requests
-from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+# Rewritten add_record.py with USD to GEL conversion
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    CallbackQueryHandler,
-    CommandHandler,
-    ConversationHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
+    CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler,
+    ContextTypes, filters
 )
+import discogs_client
+from dotenv import load_dotenv
+import os
+import requests
+from datetime import datetime
+from db import get_db, get_suppliers, get_or_create_supplier
+import logging
 
-from auth import require_auth
-from db import get_db, get_or_create_supplier, get_suppliers
-from woocommerce_sync import upsert_product_async
+from woocommerce_sync import WooConfig, WooSync, woo_is_configured, upsert_product_async
 
 load_dotenv()
+DISCOGS_TOKEN = os.getenv("DISCOGS_TOKEN")
+if not DISCOGS_TOKEN:
+    raise ValueError("DISCOGS_TOKEN must be set in environment variables.")
+
+d = discogs_client.Client("RecordStoreApp/1.0", user_token=DISCOGS_TOKEN)
 
 logger = logging.getLogger(__name__)
 
-DISCogs_BASE_URL = "https://api.discogs.com"
-DISCogs_USER_AGENT = os.getenv("DISCOGS_USER_AGENT", "RecordStoreBot/1.0")
-RESULTS_PER_PAGE = 5
-DISCogs_TOKEN = (os.getenv("DISCOGS_TOKEN") or "").strip()
-
-(
-    WAITING_FOR_QUERY,
-    WAITING_FOR_RESULTS,
-    WAITING_FOR_CONDITION,
-    WAITING_FOR_PRICE_CHOICE,
-    WAITING_FOR_PRICE_INPUT,
-    WAITING_FOR_SUPPLIER,
-    WAITING_FOR_SUPPLIER_NAME,
-) = range(7)
-
-CONDITIONS = ["M", "NM", "VG+", "VG", "G+", "G", "F", "P"]
+SEARCH_INPUT, SHOW_RESULTS, ASK_CONDITION, ASK_PRICE, ASK_QUANTITY, ASK_SUPPLIER = range(6)
+CONDITION_OPTIONS = ["m", "nm", "vg+", "vg", "g+", "g", "f", "p"]
 
 
-def _discogs_headers() -> Dict[str, str]:
-    headers = {
-        "User-Agent": DISCogs_USER_AGENT,
-    }
-    if DISCogs_TOKEN:
-        headers["Authorization"] = f"Discogs token={DISCogs_TOKEN}"
-    return headers
-
-
-def _discogs_get(path: str, params: Optional[dict] = None) -> Dict[str, Any]:
-    url = f"{DISCogs_BASE_URL}{path}"
-    response = requests.get(url, headers=_discogs_headers(), params=params, timeout=20)
-    response.raise_for_status()
-    return response.json()
-
-
-def _build_artist_album_from_release(release: Dict[str, Any]) -> str:
-    artists = release.get("artists_sort") or release.get("artists")
-    title = release.get("title") or "Unknown"
-    if isinstance(artists, str) and artists.strip():
-        return f"{artists.strip()} - {title}".strip()
-    if isinstance(artists, list) and artists:
-        name = artists[0].get("name") if isinstance(artists[0], dict) else str(artists[0])
-        if name:
-            return f"{name} - {title}".strip()
-    return title
-
-
-def _build_format(release: Dict[str, Any]) -> str:
-    formats = release.get("formats") or []
-    if not formats:
-        return ""
-    parts: List[str] = []
-    for fmt in formats:
-        if not isinstance(fmt, dict):
-            continue
-        name = fmt.get("name")
-        descriptions = fmt.get("descriptions") or []
-        text = fmt.get("text")
-        segment = []
-        if name:
-            segment.append(str(name))
-        if descriptions:
-            segment.extend([str(d) for d in descriptions])
-        if text:
-            segment.append(str(text))
-        if segment:
-            parts.append(", ".join(segment))
-    return " / ".join(parts)
-
-
-def _build_description(release: Dict[str, Any]) -> str:
-    notes = (release.get("notes") or "").strip()
-    tracklist = release.get("tracklist") or []
-    track_lines = []
-    for track in tracklist:
-        if not isinstance(track, dict):
-            continue
-        position = track.get("position") or ""
-        title = track.get("title") or ""
-        if not title:
-            continue
-        label = f"{position} {title}".strip()
-        track_lines.append(label)
-    if track_lines:
-        track_section = "Tracklist:\n" + "\n".join(track_lines)
-    else:
-        track_section = ""
-    return "\n\n".join(part for part in [notes, track_section] if part)
-
-
-def _safe_release_title(item: Dict[str, Any]) -> str:
-    title = item.get("title") or "Unknown"
-    year = item.get("year")
-    label = item.get("label") or ""
-    parts = [str(title)]
-    if year:
-        parts.append(str(year))
-    if label:
-        parts.append(str(label))
-    label_text = " · ".join(parts)
-    return label_text[:64]
-
-
-def _build_results_keyboard(results: List[Dict[str, Any]], page: int, pages: int) -> InlineKeyboardMarkup:
-    buttons = []
-    for idx, item in enumerate(results):
-        buttons.append(
-            [InlineKeyboardButton(_safe_release_title(item), callback_data=f"add_select:{idx}")]
-        )
-
-    nav_row = []
-    if page > 1:
-        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"add_page:{page - 1}"))
-    if page < pages:
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"add_page:{page + 1}"))
-    if nav_row:
-        buttons.append(nav_row)
-    return InlineKeyboardMarkup(buttons)
-
-
-def _build_condition_keyboard() -> InlineKeyboardMarkup:
-    buttons = []
-    row = []
-    for idx, condition in enumerate(CONDITIONS, start=1):
-        row.append(InlineKeyboardButton(condition, callback_data=f"add_condition:{condition}"))
-        if idx % 4 == 0:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    return InlineKeyboardMarkup(buttons)
-
-
-def _build_price_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("Use recommended", callback_data="add_price:recommended")],
-            [InlineKeyboardButton("Enter custom", callback_data="add_price:custom")],
-        ]
-    )
-
-
-def _build_supplier_keyboard(suppliers: List[Any]) -> InlineKeyboardMarkup:
-    buttons = []
-    for supplier in suppliers:
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    supplier["name"],
-                    callback_data=f"sup_{supplier['id']}",
-                )
-            ]
-        )
-    buttons.append([InlineKeyboardButton("Other (type name)", callback_data="sup_other")])
-    return InlineKeyboardMarkup(buttons)
-
-
-def _clear_add_flow(context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data.pop("add_flow", None)
-    context.user_data.pop("discogs_results", None)
-    context.user_data.pop("discogs_page", None)
-    context.user_data.pop("discogs_pages", None)
-    context.user_data.pop("discogs_query", None)
-
-
-async def _discogs_search(query: str, page: int) -> Tuple[List[Dict[str, Any]], int]:
-    params = {
-        "q": query,
-        "type": "release",
-        "page": page,
-        "per_page": RESULTS_PER_PAGE,
-    }
-    data = await asyncio.to_thread(_discogs_get, "/database/search", params)
-    results = data.get("results") or []
-    pages = data.get("pagination", {}).get("pages") or 1
-    return results, int(pages)
-
-
-async def _discogs_release(release_id: int) -> Dict[str, Any]:
-    return await asyncio.to_thread(_discogs_get, f"/releases/{release_id}")
-
-
-async def _discogs_marketplace_stats(release_id: int) -> Dict[str, Any]:
-    return await asyncio.to_thread(_discogs_get, f"/marketplace/stats/{release_id}")
-
-
-def _format_price_suggestion(stats: Dict[str, Any]) -> Tuple[str, Optional[float]]:
-    median = stats.get("median_price")
-    lowest = stats.get("lowest_price")
-    recommended = None
-
-    if isinstance(median, dict):
-        recommended = median.get("value")
-    elif median is not None:
-        recommended = median
-
-    if recommended is None:
-        if isinstance(lowest, dict):
-            recommended = lowest.get("value")
-        elif lowest is not None:
-            recommended = lowest
-
-    if recommended is None:
-        return "No marketplace stats available for this release.", None
-
+def fetch_usd_to_gel():
     try:
-        recommended_value = float(recommended)
-    except (TypeError, ValueError):
-        return "No marketplace stats available for this release.", None
+        today = datetime.now().strftime("%d.%m.%Y")
+        url = f"https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/en/json/?date={today}"
+        response = requests.get(url)
+        data = response.json()
+        for item in data[0]['currencies']:
+            if item['code'] == 'USD':
+                return float(item['rate'])
+    except Exception as e:
+        print(f"Error fetching GEL rate: {e}")
+    return 1.0
 
-    return f"Discogs median/lowest price: ${recommended_value:.2f} USD", recommended_value
+
+def save_to_inventory(row):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+        INSERT INTO inventory (artist_album, genre, style, label, format, condition, price_gel, quantity, supplier_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            row,
+        )
+        conn.commit()
 
 
-@require_auth
-async def start_add_flow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Add flow started by user=%s", update.effective_user.id)
+def fetch_price_suggestions(release_id):
+    try:
+        return d._get(f"https://api.discogs.com/marketplace/price_suggestions/{release_id}")
+    except Exception:
+        return {}
+
+
+def safe_join_list(data, default="N/A"):
+    if not data:
+        return default
+    try:
+        if isinstance(data, list):
+            return ", ".join(str(item) for item in data if item)
+        else:
+            return str(data)
+    except Exception:
+        return default
+
+
+def safe_get_labels(release):
+    try:
+        if hasattr(release, 'labels') and release.labels:
+            labels = [str(label.name) if hasattr(label, 'name') else str(label) for label in release.labels]
+            return ", ".join(labels) if labels else "N/A"
+        return "N/A"
+    except Exception:
+        return "N/A"
+
+
+def safe_get_format(release):
+    try:
+        format_data = release.data.get("formats", [])
+        format_parts = []
+        for fmt in format_data:
+            parts = []
+            if fmt.get("name"):
+                parts.append(str(fmt.get("name")))
+            if fmt.get("descriptions"):
+                parts.extend([str(desc) for desc in fmt.get("descriptions", [])])
+            if parts:
+                format_parts.append(" ".join(parts))
+        return ", ".join(format_parts) if format_parts else "Unknown Format"
+    except Exception:
+        return "Unknown Format"
+
+
+async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Enter album name (Artist - Title):")
     context.user_data.clear()
-    context.user_data["add_flow"] = {}
-    await update.message.reply_text(
-        "🔍 Enter artist or album to search Discogs (or /cancel to stop)."
-    )
-    return WAITING_FOR_QUERY
+    return SEARCH_INPUT
 
 
-async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = (update.message.text or "").strip()
-    if not query:
-        await update.message.reply_text("Please enter a search query (artist or album).")
-        return WAITING_FOR_QUERY
-
-    if not DISCogs_TOKEN:
-        await update.message.reply_text(
-            "Discogs token is not configured. Set DISCOGS_TOKEN in .env and try again."
-        )
-        logger.warning("Discogs search blocked: missing DISCOGS_TOKEN")
-        return WAITING_FOR_QUERY
-
-    logger.info("Add flow search query received: %s", query)
-    await update.message.reply_text("Searching Discogs...")
-
-    try:
-        results, pages = await _discogs_search(query, page=1)
-    except Exception as exc:
-        logger.exception("Discogs search failed: %s", exc)
-        await update.message.reply_text("❌ Discogs search failed. Please try again.")
-        return WAITING_FOR_QUERY
-
-    if not results:
-        await update.message.reply_text("No results found. Try another query.")
-        return WAITING_FOR_QUERY
-
-    context.user_data["discogs_results"] = results
-    context.user_data["discogs_page"] = 1
-    context.user_data["discogs_pages"] = pages
-    context.user_data["discogs_query"] = query
-
-    keyboard = _build_results_keyboard(results, 1, pages)
-    await update.message.reply_text(
-        f"Found results for: {query}\nSelect a release:", reply_markup=keyboard
-    )
-    logger.info("Add flow results page 1/%s shown", pages)
-    return WAITING_FOR_RESULTS
+async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.message.text.strip()
+    context.user_data["query"] = query
+    context.user_data["page"] = 1
+    return await show_results(update, context)
 
 
-async def handle_results_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    page = context.user_data["page"]
+    query = context.user_data["query"]
+    results = list(d.search(query, type='release').page(page))
+    context.user_data["results"] = results
 
-    if "discogs_query" not in context.user_data:
-        await query.edit_message_text("This search has expired. Use /add to start again.")
-        return ConversationHandler.END
+    buttons = [[InlineKeyboardButton(f"{release.title} [{safe_get_format(release)}]"[:60], callback_data=f"select_{i}")] for i, release in enumerate(results)]
 
-    try:
-        page = int(query.data.split(":", 1)[1])
-    except (IndexError, ValueError):
-        await query.edit_message_text("Invalid page selection. Use /add to start again.")
-        return ConversationHandler.END
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data="prev"))
+    if len(results) == 50:
+        nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data="next"))
+    if nav_buttons:
+        buttons.append(nav_buttons)
 
-    search_query = context.user_data.get("discogs_query", "")
+    if update.callback_query:
+        await update.callback_query.edit_message_text("Select a release:", reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await update.message.reply_text("Select a release:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    try:
-        results, pages = await _discogs_search(search_query, page=page)
-    except Exception as exc:
-        logger.exception("Discogs pagination failed: %s", exc)
-        await query.edit_message_text("❌ Failed to load that page. Try again.")
-        return WAITING_FOR_RESULTS
+    return SHOW_RESULTS
 
-    context.user_data["discogs_results"] = results
-    context.user_data["discogs_page"] = page
-    context.user_data["discogs_pages"] = pages
 
-    keyboard = _build_results_keyboard(results, page, pages)
-    await query.edit_message_text(
-        f"Results for: {search_query}\nSelect a release:", reply_markup=keyboard
-    )
-    logger.info("Add flow results page %s/%s shown", page, pages)
-    return WAITING_FOR_RESULTS
+async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query.data == "next":
+        context.user_data["page"] += 1
+    elif update.callback_query.data == "prev":
+        context.user_data["page"] = max(1, context.user_data["page"] - 1)
+    return await show_results(update, context)
 
 
 async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    results = context.user_data.get("discogs_results") or []
-    try:
-        idx = int(query.data.split(":", 1)[1])
-    except (IndexError, ValueError):
-        await query.edit_message_text("Invalid selection. Use /add to start again.")
-        return ConversationHandler.END
-
-    if idx < 0 or idx >= len(results):
-        await query.edit_message_text("This selection is no longer available. Use /add again.")
-        return ConversationHandler.END
-
-    release_summary = results[idx]
-    release_id = release_summary.get("id")
-    if not release_id:
-        await query.edit_message_text("Release ID missing. Use /add again.")
-        return ConversationHandler.END
-
-    logger.info("Release selected: discogs_id=%s", release_id)
-
-    try:
-        release = await _discogs_release(int(release_id))
-    except Exception as exc:
-        logger.exception("Discogs release fetch failed: %s", exc)
-        await query.edit_message_text("❌ Failed to load release details. Try again.")
-        return WAITING_FOR_RESULTS
-
-    artist_album = _build_artist_album_from_release(release)
-    genre = ", ".join(release.get("genres") or [])
-    style = ", ".join(release.get("styles") or [])
-    label = ""
-    labels = release.get("labels") or []
-    if labels and isinstance(labels[0], dict):
-        label = labels[0].get("name") or ""
-    year = release.get("year")
-    fmt = _build_format(release)
-    description = _build_description(release)
-
-    context.user_data["add_flow"] = {
-        "discogs_id": int(release_id),
-        "artist_album": artist_album,
-        "genre": genre,
-        "style": style,
-        "label": label,
-        "format": fmt,
-        "year": year,
-        "description": description,
-        "quantity": 1,
-    }
-
-    await query.edit_message_text(
-        f"Selected: {artist_album}\nNow choose condition:",
-        reply_markup=_build_condition_keyboard(),
+    idx = int(update.callback_query.data.split("_")[1])
+    selected = context.user_data["results"][idx]
+    context.user_data["release"] = selected
+    await update.callback_query.edit_message_text(
+        f"Selected: {selected.title}\n\nNow choose vinyl condition:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(c, callback_data=f"cond_{c}") for c in CONDITION_OPTIONS[i:i+4]]
+            for i in range(0, len(CONDITION_OPTIONS), 4)
+        ])
     )
-    logger.info("Condition prompt shown for discogs_id=%s", release_id)
-    return WAITING_FOR_CONDITION
+    return ASK_CONDITION
 
 
-async def handle_condition(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def handle_condition_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cond = update.callback_query.data.split("_")[1]
+    context.user_data["condition"] = cond
+    release = context.user_data["release"]
+    suggestions = fetch_price_suggestions(release.id)
+    full_condition = {
+        "m": "Mint (M)", "nm": "Near Mint (NM or M-)", "vg+": "Very Good Plus (VG+)",
+        "vg": "Very Good (VG)", "g+": "Good Plus (G+)", "g": "Good (G)",
+        "f": "Fair (F)", "p": "Poor (P)"
+    }.get(cond)
 
-    data = context.user_data.get("add_flow")
-    if not data:
-        await query.edit_message_text("This add flow has expired. Use /add again.")
-        return ConversationHandler.END
-
-    condition = query.data.split(":", 1)[1]
-    data["condition"] = condition
-    logger.info("Condition set: %s", condition)
-
-    stats_msg = "Fetching Discogs marketplace stats..."
-    await query.edit_message_text(stats_msg)
-
-    stats_text = ""
-    try:
-        stats = await _discogs_marketplace_stats(int(data["discogs_id"]))
-        stats_text, recommended = _format_price_suggestion(stats)
-        data["discogs_price_usd"] = recommended
-    except Exception as exc:
-        logger.exception("Discogs marketplace stats failed: %s", exc)
-        stats_text = "No marketplace stats available for this release."
-        data["discogs_price_usd"] = None
-
-    await query.edit_message_text(
-        f"{stats_text}\n\nChoose how to set price:",
-        reply_markup=_build_price_keyboard(),
-    )
-    logger.info("Price choice prompt shown")
-    return WAITING_FOR_PRICE_CHOICE
-
-
-async def handle_price_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = context.user_data.get("add_flow")
-    if not data:
-        await query.edit_message_text("This add flow has expired. Use /add again.")
-        return ConversationHandler.END
-
-    choice = query.data.split(":", 1)[1]
-    data["price_choice"] = choice
-    suggested = data.get("discogs_price_usd")
-
-    if choice == "recommended" and suggested is not None:
-        prompt = f"Suggested (USD): ${suggested:.2f}\nEnter price in GEL:"
+    price_usd = suggestions.get(full_condition, {}).get("value", None)
+    if price_usd:
+        rate = fetch_usd_to_gel()
+        price_gel = round(price_usd * rate, 2)
+        context.user_data["suggested_price_usd"] = round(price_usd, 2)
+        context.user_data["suggested_price_gel"] = price_gel
+        msg = f"Suggested price for {full_condition}: ${price_usd:.2f} ≈ {price_gel:.2f} GEL"
     else:
-        prompt = "Enter price in GEL:"
+        context.user_data["suggested_price_usd"] = None
+        context.user_data["suggested_price_gel"] = None
+        msg = "No price suggestion found."
 
-    await query.edit_message_text(prompt)
-    logger.info("Price choice made: %s", choice)
-    return WAITING_FOR_PRICE_INPUT
+    await update.callback_query.edit_message_text(
+        msg + "\n\nSend your own price in GEL or type 'ok' to accept the suggested price."
+    )
+    return ASK_PRICE
 
 
 async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = context.user_data.get("add_flow")
-    if not data:
-        await update.message.reply_text("This add flow has expired. Use /add again.")
-        return ConversationHandler.END
+    msg = update.message.text.strip()
 
-    raw = (update.message.text or "").strip()
+    if msg.lower() == "ok" and context.user_data.get("suggested_price_gel") is not None:
+        final_price = context.user_data["suggested_price_gel"]
+    else:
+        try:
+            final_price = float(msg)
+        except ValueError:
+            await update.message.reply_text("❌ Invalid price. Please enter a valid number or 'ok' to accept suggested price:")
+            return ASK_PRICE
+
+    context.user_data["final_price"] = round(final_price, 2)
+    await update.message.reply_text("How many copies do you want to add?")
+    return ASK_QUANTITY
+
+
+async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        price_gel = float(raw)
-        if price_gel < 0:
-            raise ValueError("negative")
+        qty = int(update.message.text.strip())
+        if qty < 1:
+            raise ValueError
     except ValueError:
-        await update.message.reply_text("Please enter a valid GEL price (e.g., 45 or 45.50).")
-        return WAITING_FOR_PRICE_INPUT
+        await update.message.reply_text("❌ Invalid quantity. Enter a whole number ≥ 1:")
+        return ASK_QUANTITY
 
-    data["price_gel"] = price_gel
-    logger.info("Price set: %.2f", price_gel)
+    context.user_data["quantity"] = qty
 
     suppliers = get_suppliers()
-    keyboard = _build_supplier_keyboard(suppliers)
-    await update.message.reply_text("Select supplier:", reply_markup=keyboard)
-    logger.info("Supplier list shown")
-    return WAITING_FOR_SUPPLIER
-
-
-async def handle_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = context.user_data.get("add_flow")
-    if not data:
-        await query.edit_message_text("This add flow has expired. Use /add again.")
-        return ConversationHandler.END
-
-    supplier_token = query.data.split("_", 1)[1]
-    if supplier_token == "other":
-        await query.edit_message_text("Type supplier name:")
-        logger.info("Supplier custom name requested")
-        return WAITING_FOR_SUPPLIER_NAME
-
-    try:
-        supplier_id = int(supplier_token)
-    except ValueError:
-        await query.edit_message_text("Invalid supplier selection. Use /add again.")
-        return ConversationHandler.END
-
-    data["supplier_id"] = supplier_id
-    logger.info("Supplier selected: %s", supplier_id)
-
-    await query.edit_message_text("Saving record locally...")
-    return await _finalize_add_flow(update, context)
-
-
-async def handle_supplier_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = context.user_data.get("add_flow")
-    if not data:
-        await update.message.reply_text("This add flow has expired. Use /add again.")
-        return ConversationHandler.END
-
-    name = (update.message.text or "").strip()
-    if not name:
-        await update.message.reply_text("Supplier name cannot be empty. Please enter a name.")
-        return WAITING_FOR_SUPPLIER_NAME
-
-    try:
-        supplier_id = get_or_create_supplier(name)
-    except Exception as exc:
-        logger.exception("Supplier create failed: %s", exc)
-        await update.message.reply_text("Failed to save supplier. Try again.")
-        return WAITING_FOR_SUPPLIER_NAME
-
-    data["supplier_id"] = supplier_id
-    logger.info("Supplier created: %s", supplier_id)
-
-    await update.message.reply_text("Saving record locally...")
-    return await _finalize_add_flow(update, context)
-
-
-def _insert_inventory_row(item: Dict[str, Any]) -> int:
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO inventory (
-                artist_album, genre, style, label, format, condition,
-                price_gel, quantity, supplier_id, year, description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                item.get("artist_album"),
-                item.get("genre"),
-                item.get("style"),
-                item.get("label"),
-                item.get("format"),
-                item.get("condition"),
-                item.get("price_gel"),
-                item.get("quantity", 1),
-                item.get("supplier_id"),
-                item.get("year"),
-                item.get("description"),
-            ),
+    if suppliers:
+        buttons = [[InlineKeyboardButton(name, callback_data=f"sup_{sid}")]
+                   for sid, name in suppliers]
+        await update.message.reply_text(
+            "Select supplier:",
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
-        conn.commit()
-        return int(cur.lastrowid)
+    else:
+        await update.message.reply_text("Enter supplier name:")
+
+    return ASK_SUPPLIER
 
 
-async def _finalize_add_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = context.user_data.get("add_flow")
-    if not data:
-        return ConversationHandler.END
+async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        supplier_id = int(update.callback_query.data.split("_")[1])
+        supplier_name = None
+        await update.callback_query.answer()
+    else:
+        supplier_name = update.message.text.strip()
+        supplier_id = get_or_create_supplier(supplier_name)
+
+    release = context.user_data["release"]
+    cond = context.user_data["condition"]
+    price = context.user_data["final_price"]
+    qty = context.user_data["quantity"]
+
+    row = [
+        str(release.title),
+        safe_join_list(release.genres),
+        safe_join_list(release.styles),
+        safe_get_labels(release),
+        safe_get_format(release),
+        str(cond),
+        float(price),
+        int(qty),
+        supplier_id,
+    ]
 
     try:
-        inventory_id = await asyncio.to_thread(_insert_inventory_row, data)
-    except Exception as exc:
-        logger.exception("DB insert failed: %s", exc)
-        if update.callback_query:
-            await update.callback_query.edit_message_text("❌ Failed to save record locally.")
+        save_to_inventory(row)
+        name_display = supplier_name if supplier_name else next((n for i, n in get_suppliers() if i == supplier_id), "")
+        await update.effective_message.reply_text(
+            f"✅ {qty} copy(ies) of '{release.title}' added from {name_display} at {price:.2f} GEL each."
+        )
+
+        # --- Woo sync in background (non-blocking) ---
+        if woo_is_configured():
+            await update.effective_message.reply_text("Woo sync: started in background...")
+            chat_id = update.effective_chat.id if update.effective_chat else None
+            app = context.application
+
+            try:
+                product_payload = WooSync(WooConfig.from_env()).build_product_payload(
+                    release_id=int(getattr(release, "id", 0) or 0),
+                    title=str(release.title),
+                    price_gel=float(price),
+                    quantity=int(qty),
+                    condition=str(cond),
+                    supplier_name=name_display or "Unknown",
+                    genres=safe_join_list(release.genres),
+                    styles=safe_join_list(release.styles),
+                    labels=safe_get_labels(release),
+                    vinyl_format=safe_get_format(release),
+                )
+            except Exception as e:
+                logger.exception("Failed to build Woo payload")
+                await update.effective_message.reply_text(f"Woo sync: failed to build payload: {e}")
+                return ConversationHandler.END
+
+            async def _run_woo_sync() -> None:
+                try:
+                    res = await upsert_product_async(product_payload)
+                    pid = res.get("id")
+                    if chat_id is not None:
+                        await app.bot.send_message(chat_id=chat_id, text=f"Woo sync OK. Product id: {pid}")
+                except Exception as e:
+                    logger.exception("Woo sync failed")
+                    if chat_id is not None:
+                        await app.bot.send_message(chat_id=chat_id, text=f"Woo sync FAILED: {e}")
+
+            app.create_task(_run_woo_sync())
         else:
-            await update.message.reply_text("❌ Failed to save record locally.")
-        _clear_add_flow(context)
-        return ConversationHandler.END
+            logger.info("Woo env vars not set; skipping Woo sync")
+    except Exception as e:
+        await update.effective_message.reply_text(f"❌ Error saving to inventory: {str(e)}")
+        print(f"Error details: {e}")
+        print(f"Row data: {row}")
 
-    data["inventory_id"] = inventory_id
-    logger.info("Inventory insert OK: id=%s", inventory_id)
-
-    if update.callback_query:
-        await update.callback_query.edit_message_text("Saved locally ✅")
-    else:
-        await update.message.reply_text("Saved locally ✅")
-
-    _clear_add_flow(context)
-
-    await _start_woo_sync(update, context, data)
     return ConversationHandler.END
 
-
-async def _start_woo_sync(update: Update, context: ContextTypes.DEFAULT_TYPE, item: Dict[str, Any]):
-    logger.info("Woo sync started for inventory %s", item.get("inventory_id"))
-
-    if update.callback_query:
-        await update.callback_query.message.reply_text("🛒 Woo sync started...")
-    else:
-        await update.message.reply_text("🛒 Woo sync started...")
-
-    async def _run():
-        try:
-            product = await upsert_product_async(item, update=update, context=context)
-            product_id = product.get("id") if isinstance(product, dict) else None
-            logger.info("Woo sync success for inventory %s", item.get("inventory_id"))
-            message = "🛒 Woo sync success ✅"
-            if product_id:
-                message += f" (Product ID: {product_id})"
-        except Exception as exc:
-            logger.exception("Woo sync failed: %s", exc)
-            message = "🛒 Woo sync failed ❌"
-
-        if update.callback_query:
-            await update.callback_query.message.reply_text(message)
-        else:
-            await update.message.reply_text(message)
-
-    context.application.create_task(_run())
-
-
-async def cancel_add_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Add flow cancelled by user=%s", update.effective_user.id)
-    _clear_add_flow(context)
-    await update.message.reply_text("Add flow cancelled.")
-    return ConversationHandler.END
-
-
+# Backwards-compatibility: older bot.py versions import this name.
 async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("This supplier selection has expired. Use /add to start again.")
+    """Alias for the supplier callback handler used in older versions."""
+    return await handle_supplier_input(update, context)
+
+async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel the add flow from any state."""
+    context.user_data.clear()
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("🚫 Add flow cancelled.")
+    else:
+        await update.message.reply_text("🚫 Add flow cancelled.")
     return ConversationHandler.END
-
-
-def build_add_record_conversation() -> ConversationHandler:
-    return ConversationHandler(
-        entry_points=[CommandHandler("add", start_add_flow_handler)],
-        states={
-            WAITING_FOR_QUERY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search_query),
-            ],
-            WAITING_FOR_RESULTS: [
-                CallbackQueryHandler(handle_results_pagination, pattern=r"^add_page:\d+$"),
-                CallbackQueryHandler(handle_release_select, pattern=r"^add_select:\d+$"),
-            ],
-            WAITING_FOR_CONDITION: [
-                CallbackQueryHandler(handle_condition, pattern=r"^add_condition:"),
-            ],
-            WAITING_FOR_PRICE_CHOICE: [
-                CallbackQueryHandler(handle_price_choice, pattern=r"^add_price:"),
-            ],
-            WAITING_FOR_PRICE_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price_input),
-            ],
-            WAITING_FOR_SUPPLIER: [
-                CallbackQueryHandler(handle_supplier_callback, pattern=r"^sup_(\d+|other)$"),
-            ],
-            WAITING_FOR_SUPPLIER_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_supplier_name),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_add_flow)],
-        name="add_record_flow",
-        persistent=False,
-    )
-
 
 def start_add_flow():
-    """Compatibility wrapper for bot.py (returns ConversationHandler)."""
-    return build_add_record_conversation()
-
-
-__all__ = [
-    "start_add_flow_handler",
-    "start_add_flow",
-    "build_add_record_conversation",
-    "orphan_supplier_callback",
-]
+    return ConversationHandler(
+        entry_points=[CommandHandler("add", start_add)],
+        states={
+            SEARCH_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search)],
+            SHOW_RESULTS: [
+                CallbackQueryHandler(handle_release_select, pattern=r"^select_"),
+                CallbackQueryHandler(handle_pagination, pattern="^(next|prev)$"),
+            ],
+            ASK_CONDITION: [CallbackQueryHandler(handle_condition_select, pattern=r"^cond_")],
+            ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price_input)],
+            ASK_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_quantity_input)],
+            ASK_SUPPLIER: [
+                CallbackQueryHandler(handle_supplier_input, pattern=r"^sup_\d+"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_supplier_input),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_add)],  # ← crucial
+        name="add_record",
+        persistent=False,
+    )
