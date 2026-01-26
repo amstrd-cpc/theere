@@ -1,4 +1,5 @@
 # Rewritten add_record.py with USD to GEL conversion
+import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler,
@@ -12,7 +13,12 @@ from datetime import datetime
 from db import get_db, get_suppliers, get_or_create_supplier
 import logging
 
-from woocommerce_sync import WooConfig, WooSync, woo_is_configured, upsert_product_async
+from woocommerce_client import (
+    WooNotConfigured,
+    create_product_from_inventory,
+    find_product_by_sku,
+    update_product_from_inventory,
+)
 
 load_dotenv()
 DISCOGS_TOKEN = os.getenv("DISCOGS_TOKEN")
@@ -120,6 +126,17 @@ def safe_get_format(release):
         return ", ".join(format_parts) if format_parts else "Unknown Format"
     except Exception:
         return "Unknown Format"
+
+
+def _upsert_inventory_item_to_woo(item: dict) -> dict:
+    sku = str(item.get("id") or "").strip()
+    if not sku:
+        raise ValueError("Inventory item id missing for Woo SKU")
+
+    existing = find_product_by_sku(sku)
+    if existing and existing.get("id"):
+        return update_product_from_inventory(int(existing["id"]), item)
+    return create_product_from_inventory(item)
 
 
 async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,62 +322,48 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
                 "",
             )
             await update.effective_message.reply_text(
-                f"✅ {qty} copy(ies) of '{release.title}' added from {name_display} at {price:.2f} GEL each."
+                f"✅ Saved locally (ID: {inventory_id}). Syncing to Woo…"
             )
 
-            # --- Woo sync in background (non-blocking) ---
-            if woo_is_configured():
-                logger.info(
-                    "Woo sync starting: inventory_id=%s supplier_id=%s",
-                    inventory_id,
-                    supplier_id,
+            item = {
+                "id": inventory_id,
+                "artist_album": str(release.title),
+                "genre": safe_join_list(release.genres),
+                "style": safe_join_list(release.styles),
+                "label": safe_get_labels(release),
+                "format": safe_get_format(release),
+                "condition": str(cond),
+                "price_gel": float(price),
+                "quantity": int(qty),
+                "supplier_id": supplier_id,
+                "product_type": "record",
+            }
+
+            logger.info(
+                "Woo sync starting: inventory_id=%s supplier_id=%s",
+                inventory_id,
+                supplier_id,
+            )
+            try:
+                woo_product = await asyncio.to_thread(_upsert_inventory_item_to_woo, item)
+            except WooNotConfigured:
+                logger.info("Woo not configured; skipping Woo sync")
+                await update.effective_message.reply_text(
+                    "🛒 Woo not configured: set WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET"
                 )
-                chat_id = update.effective_chat.id if update.effective_chat else None
-                app = context.application
-
-                try:
-                    product_payload = WooSync(WooConfig.from_env()).build_product_payload(
-                        inventory_id=inventory_id,
-                        release_id=int(getattr(release, "id", 0) or 0),
-                        title=str(release.title),
-                        price_gel=float(price),
-                        quantity=int(qty),
-                        condition=str(cond),
-                        supplier_name=name_display or "Unknown",
-                        genres=safe_join_list(release.genres),
-                        styles=safe_join_list(release.styles),
-                        labels=safe_get_labels(release),
-                        vinyl_format=safe_get_format(release),
-                    )
-                except Exception as e:
-                    logger.exception("Failed to build Woo payload")
-                    await update.effective_message.reply_text(f"🛒 Woo sync FAILED: {e}")
-                    return ConversationHandler.END
-
-                async def _run_woo_sync() -> None:
-                    try:
-                        res = await upsert_product_async(product_payload)
-                        pid = res.get("id")
-                        if pid:
-                            set_inventory_woo_link(inventory_id, int(pid))
-                        logger.info("Woo sync OK: inventory_id=%s product_id=%s", inventory_id, pid)
-                        if chat_id is not None:
-                            await app.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"🛒 Woo sync OK. Product id: {pid}",
-                            )
-                    except Exception as e:
-                        logger.exception("Woo sync failed")
-                        if chat_id is not None:
-                            await app.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"🛒 Woo sync FAILED: {e}",
-                            )
-
-                app.create_task(_run_woo_sync())
+            except Exception as e:
+                logger.exception("Woo sync failed")
+                await update.effective_message.reply_text(
+                    f"🛒 Woo sync failed: {type(e).__name__}: {e}"
+                )
             else:
-                logger.info("Woo env vars not set; skipping Woo sync")
-                await update.effective_message.reply_text("🛒 Woo sync skipped (not configured).")
+                woo_id = woo_product.get("id")
+                if woo_id:
+                    set_inventory_woo_link(inventory_id, int(woo_id))
+                logger.info("Woo sync OK: inventory_id=%s product_id=%s", inventory_id, woo_id)
+                await update.effective_message.reply_text(
+                    f"🛒 Woo sync OK. Product id: {woo_id}"
+                )
         except Exception as e:
             await update.effective_message.reply_text(f"❌ Error saving to inventory: {str(e)}")
             logger.exception("Error saving inventory row")
