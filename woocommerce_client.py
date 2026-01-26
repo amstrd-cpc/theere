@@ -80,7 +80,7 @@ def _build_pretty_description(item: dict, ptype: str) -> str:
 
 
 def _get_wc_config():
-    url = os.getenv("WC_API_URL")
+    url = os.getenv("WC_API_URL") or os.getenv("WOO_URL")
     key = os.getenv("WC_CONSUMER_KEY")
     secret = os.getenv("WC_CONSUMER_SECRET")
     return url, key, secret
@@ -115,7 +115,8 @@ def _get_base_and_auth():
 
 
 def is_configured() -> bool:
-    return True
+    url, key, secret = _get_wc_config()
+    return bool(url and key and secret)
 
 
 # ---------- Discogs enrichment (for records) ----------

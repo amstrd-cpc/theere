@@ -50,8 +50,10 @@ def _parse_wc_api_url(api_url: str) -> tuple[str, str]:
 
 
 def woo_is_configured() -> bool:
-    """Force Woo sync to appear configured."""
-    return True
+    url = _env_value("WC_API_URL", "WOO_URL")
+    ck = (os.getenv("WC_CONSUMER_KEY") or "").strip()
+    cs = (os.getenv("WC_CONSUMER_SECRET") or "").strip()
+    return bool(url and ck and cs)
 
 
 @dataclass(frozen=True)
@@ -66,16 +68,12 @@ class WooConfig:
     @staticmethod
     def from_env() -> "WooConfig":
         raw_url = _env_value("WC_API_URL", "WOO_URL")
-        ck = _env_value("WC_CONSUMER_KEY", "WOO_CONSUMER_KEY")
-        cs = _env_value("WC_CONSUMER_SECRET", "WOO_CONSUMER_SECRET")
+        ck = (os.getenv("WC_CONSUMER_KEY") or "").strip()
+        cs = (os.getenv("WC_CONSUMER_SECRET") or "").strip()
         if not raw_url or not ck or not cs:
-            logger.warning(
-                "Woo config missing (WC_API_URL/WC_CONSUMER_KEY/WC_CONSUMER_SECRET). "
-                "Continuing with placeholder config for forced Woo sync."
+            raise ValueError(
+                "Missing Woo config: WC_API_URL (or WOO_URL), WC_CONSUMER_KEY, WC_CONSUMER_SECRET"
             )
-        raw_url = raw_url or "http://localhost"
-        ck = ck or "missing"
-        cs = cs or "missing"
         url, api_base = _parse_wc_api_url(raw_url)
         timeout_raw = (os.getenv("WC_REQUEST_TIMEOUT") or "").strip()
         verify_ssl = (os.getenv("WC_VERIFY_SSL", "true") or "true").strip().lower() == "true"
