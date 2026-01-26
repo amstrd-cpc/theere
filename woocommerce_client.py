@@ -3,7 +3,9 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 import discogs_client
+from dotenv import load_dotenv
 
+load_dotenv()
 
 class WooNotConfigured(Exception):
     pass

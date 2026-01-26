@@ -12,17 +12,30 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from pathlib import Path
 from typing import Any, Iterable
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+def _resolve_db_path() -> str:
+    """Resolve the inventory DB path with sane defaults."""
+    env_db = os.getenv("RECORDSTORE_DB_FILE") or os.getenv("DB_PATH")
+    if env_db:
+        return env_db
+
+    base = Path(BASE_DIR)
+    for name in ("clime_db_final_219.db", "clime_db_optimized.db", "clime_db.db"):
+        candidate = base / name
+        if candidate.exists():
+            return str(candidate)
+
+    # Default to the optimized name for new installs.
+    return str(base / "clime_db_optimized.db")
+
+
 # Prefer the optimized DB name, but allow an override for deployments.
-DB_FILE = (
-    os.getenv("RECORDSTORE_DB_FILE")
-    or os.getenv("DB_PATH")
-    or os.path.join(BASE_DIR, "clime_db.db")
-)
+DB_FILE = _resolve_db_path()
 
 def _apply_connection_pragmas(conn: sqlite3.Connection) -> None:
     """Pragmas that must be set per-connection."""

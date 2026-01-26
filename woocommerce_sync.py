@@ -22,6 +22,9 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 if TYPE_CHECKING:  # pragma: no cover
     from telegram import Update  # type: ignore
@@ -127,6 +130,11 @@ class WooSync:
         Note: image handling is optional; if you want to attach Discogs image URLs,
         pass image_url.
         """
+        if not title:
+            raise ValueError("Woo product title is required")
+        if price_gel is None:
+            raise ValueError("Woo product price is required")
+
         safe_release = int(release_id) if release_id else 0
         if inventory_id is not None:
             sku = str(int(inventory_id))
@@ -143,6 +151,8 @@ class WooSync:
             f"Discogs release: {safe_release}"
         )
 
+        stock_status = "instock" if int(quantity) > 0 else "outofstock"
+
         payload: dict[str, Any] = {
             "name": title,
             "type": "simple",
@@ -150,6 +160,8 @@ class WooSync:
             "regular_price": f"{float(price_gel):.2f}",
             "manage_stock": True,
             "stock_quantity": int(quantity),
+            "stock_status": stock_status,
+            "status": "publish",
             "description": desc,
             "short_description": desc,
             "meta_data": [
@@ -194,9 +206,12 @@ class WooSync:
                 new_qty = max(0, existing_qty + incoming_qty)
 
             update_payload = {
+                "name": product.get("name"),
                 "regular_price": str(product.get("regular_price")),
                 "manage_stock": True,
                 "stock_quantity": new_qty,
+                "stock_status": "instock" if new_qty > 0 else "outofstock",
+                "status": product.get("status") or "publish",
                 "description": product.get("description"),
                 "short_description": product.get("short_description"),
                 "meta_data": product.get("meta_data", []),
