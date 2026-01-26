@@ -297,6 +297,11 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
 
         # --- Woo sync in background (non-blocking) ---
         if woo_is_configured():
+            logger.info(
+                "Woo sync triggered for inventory_id=%s supplier_id=%s",
+                inventory_id,
+                supplier_id,
+            )
             await update.effective_message.reply_text("Woo sync: started in background...")
             chat_id = update.effective_chat.id if update.effective_chat else None
             app = context.application
