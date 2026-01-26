@@ -115,8 +115,7 @@ def _get_base_and_auth():
 
 
 def is_configured() -> bool:
-    url, key, secret = _get_wc_config()
-    return all([url, key, secret])
+    return True
 
 
 # ---------- Discogs enrichment (for records) ----------
