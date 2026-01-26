@@ -32,12 +32,22 @@ if TYPE_CHECKING:  # pragma: no cover
 # Configuration
 # -----------------------------------------------------------------------------
 
+def _env_value(primary: str, fallback: str) -> str:
+    return (os.getenv(primary) or os.getenv(fallback) or "").strip()
+
+
+def _parse_wc_api_url(api_url: str) -> tuple[str, str]:
+    if "/wp-json/wc/" in api_url:
+        base, suffix = api_url.split("/wp-json/wc/", 1)
+        return base.rstrip("/"), f"/wp-json/wc/{suffix.strip('/')}"
+    return api_url.rstrip("/"), "/wp-json/wc/v3"
+
+
 def woo_is_configured() -> bool:
-    return bool(
-        (os.getenv("WOO_URL") or "").strip()
-        and (os.getenv("WOO_CONSUMER_KEY") or "").strip()
-        and (os.getenv("WOO_CONSUMER_SECRET") or "").strip()
-    )
+    url = _env_value("WC_API_URL", "WOO_URL")
+    ck = _env_value("WC_CONSUMER_KEY", "WOO_CONSUMER_KEY")
+    cs = _env_value("WC_CONSUMER_SECRET", "WOO_CONSUMER_SECRET")
+    return bool(url and ck and cs)
 
 
 @dataclass(frozen=True)
@@ -50,12 +60,16 @@ class WooConfig:
 
     @staticmethod
     def from_env() -> "WooConfig":
-        url = (os.getenv("WOO_URL") or "").strip().rstrip("/")
-        ck = (os.getenv("WOO_CONSUMER_KEY") or "").strip()
-        cs = (os.getenv("WOO_CONSUMER_SECRET") or "").strip()
-        if not url or not ck or not cs:
-            raise ValueError("WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET must be set")
-        return WooConfig(url=url, consumer_key=ck, consumer_secret=cs)
+        raw_url = _env_value("WC_API_URL", "WOO_URL")
+        ck = _env_value("WC_CONSUMER_KEY", "WOO_CONSUMER_KEY")
+        cs = _env_value("WC_CONSUMER_SECRET", "WOO_CONSUMER_SECRET")
+        if not raw_url or not ck or not cs:
+            raise ValueError(
+                "WC_API_URL / WC_CONSUMER_KEY / WC_CONSUMER_SECRET must be set "
+                "(WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET also supported)"
+            )
+        url, api_base = _parse_wc_api_url(raw_url)
+        return WooConfig(url=url, consumer_key=ck, consumer_secret=cs, api_base=api_base)
 
 
 # -----------------------------------------------------------------------------
@@ -245,7 +259,7 @@ def sync_inventory_to_woo(update: Optional[Any] = None, context: Optional[Any] =
         _schedule_reply(
             update,
             context,
-            "🛒 Woo sync is not configured. Set WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET in .env",
+            "🛒 Woo sync is not configured. Set WC_API_URL / WC_CONSUMER_KEY / WC_CONSUMER_SECRET in .env",
         )
         return
 

@@ -17,7 +17,7 @@ A password-protected Telegram assistant for running a vinyl shop from your phone
 - A Telegram bot token
 - SQLite (bundled with Python) – a single local database (`clime_db_optimized.db`) stores inventory, sales, Woo info, and search indexes.
 - Optional: WooCommerce API keys for product sync and order ingestion
-- Optional: Discogs token for richer metadata when adding records
+- Optional: Discogs token for richer metadata when adding records (required for /add)
 
 ## Setup
 
@@ -33,7 +33,7 @@ A password-protected Telegram assistant for running a vinyl shop from your phone
    ADMIN_IDS=123456789,987654321  # comma-separated Telegram user IDs
    ADMIN_CHAT_ID=123456789        # optional override for outbound alerts
 
-   # Discogs enrichment (optional but recommended for /add)
+   # Discogs enrichment (required for /add)
    DISCOGS_TOKEN=your_discogs_token
 
    # WooCommerce sync (optional)
@@ -43,6 +43,9 @@ A password-protected Telegram assistant for running a vinyl shop from your phone
    WC_VERIFY_SSL=true           # set to false only if you knowingly use self-signed certs
    WOO_WEBHOOK_SECRET=supersecretpath  # used in webhook URL /wc-webhook/<secret>
    WEBHOOK_PORT=32412           # port for the Flask webhook server
+
+   # Legacy fallback (deprecated)
+   # WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET are still supported, but WC_* is preferred.
    ```
 
 3. **Run the bot**
@@ -60,7 +63,7 @@ A password-protected Telegram assistant for running a vinyl shop from your phone
 If your WooCommerce store is currently empty and you want to publish your entire local inventory in one go (with **Discogs cover + tracklist enrichment** and stable identifiers), run:
 
 ```bash
-python initial_sync_woo.py
+python insync.py
 ```
 
 The script is **idempotent**: it uses `SKU = inventory.id`, so re-running it will **not** create duplicates.
@@ -94,7 +97,7 @@ All commands below require authentication unless noted.
 ## Troubleshooting
 
 - **Auth errors:** confirm your Telegram user ID is listed in `ADMIN_IDS`.
-- **Discogs lookups failing:** make sure `DISCOGS_TOKEN` is set and valid.
+- **Discogs lookups failing:** make sure `DISCOGS_TOKEN` is set and valid. `/add` requires it.
 - **Woo sync issues:** verify `WC_API_URL`, keys, and that your host/port is reachable; check `WC_VERIFY_SSL` when using self-signed certs.
 - **Reports missing data:** ensure sales are being inserted into the `sales` table in `clime_db_optimized.db` (use `/sales` to confirm recent entries).
 
@@ -109,4 +112,3 @@ When a WooCommerce order comes in (status `processing` or `completed`), the bot 
 You can disable this behavior (notifications only) by setting:
 
 - `AUTO_SELL_WOO=0`
-

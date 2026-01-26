@@ -16,10 +16,15 @@ from woocommerce_sync import WooConfig, WooSync, woo_is_configured, upsert_produ
 
 load_dotenv()
 DISCOGS_TOKEN = os.getenv("DISCOGS_TOKEN")
-if not DISCOGS_TOKEN:
-    raise ValueError("DISCOGS_TOKEN must be set in environment variables.")
 
-d = discogs_client.Client("RecordStoreApp/1.0", user_token=DISCOGS_TOKEN)
+
+def _get_discogs_client():
+    if not DISCOGS_TOKEN:
+        return None
+    return discogs_client.Client("RecordStoreApp/1.0", user_token=DISCOGS_TOKEN)
+
+
+d = _get_discogs_client()
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +60,8 @@ def save_to_inventory(row):
 
 
 def fetch_price_suggestions(release_id):
+    if not d:
+        return {}
     try:
         return d._get(f"https://api.discogs.com/marketplace/price_suggestions/{release_id}")
     except Exception:
@@ -101,6 +108,11 @@ def safe_get_format(release):
 
 
 async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not d:
+        await update.message.reply_text(
+            "⚠️ Discogs is not configured. Set DISCOGS_TOKEN to enable /add."
+        )
+        return ConversationHandler.END
     await update.message.reply_text("Enter album name (Artist - Title):")
     context.user_data.clear()
     return SEARCH_INPUT
@@ -114,6 +126,11 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not d:
+        await update.message.reply_text(
+            "⚠️ Discogs is not configured. Set DISCOGS_TOKEN to enable /add."
+        )
+        return ConversationHandler.END
     page = context.user_data["page"]
     query = context.user_data["query"]
     results = list(d.search(query, type='release').page(page))
