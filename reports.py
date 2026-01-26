@@ -133,36 +133,6 @@ def generate_monthly_excel_report():
     return generate_excel_report(start, end, "monthly")
 
 
-async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Default /reports command.
-
-    Backwards compatible with the original project: sends today's Excel report.
-    """
-    try:
-        file_path, summary = generate_daily_excel_report()
-        await update.message.reply_text(summary, parse_mode="Markdown")
-        with open(file_path, "rb") as f:
-            await update.message.reply_document(
-                document=f,
-                filename=os.path.basename(file_path),
-                caption="📊 Daily Sales Report",
-            )
-    except FileNotFoundError:
-        await update.message.reply_text(
-            "📭 No sales recorded for today yet.\nStart selling some records to generate a report! 🎵"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error generating report: {e}")
-
-
-def report_handler():
-    """Return a CommandHandler for /reports.
-
-    bot.py calls this during startup.
-    """
-    return CommandHandler("reports", send_report)
-
-
 def get_recent_sales(limit: int = 10):
     with get_db(row_factory=None) as conn:
         cur = conn.cursor()

@@ -127,13 +127,29 @@ def init_db() -> None:
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS user_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER UNIQUE,
-                authenticated INTEGER DEFAULT 0,
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                authenticated_at TEXT,
+                expires_at TEXT,
                 last_activity TEXT
             )
             """
         )
+
+        cur.execute("PRAGMA table_info(user_sessions)")
+        existing_session_columns = {row[1] for row in cur.fetchall()}
+        expected_session_columns = {
+            "user_id": "INTEGER",
+            "username": "TEXT",
+            "first_name": "TEXT",
+            "authenticated_at": "TEXT",
+            "expires_at": "TEXT",
+            "last_activity": "TEXT",
+        }
+        for column, col_type in expected_session_columns.items():
+            if column not in existing_session_columns:
+                cur.execute(f"ALTER TABLE user_sessions ADD COLUMN {column} {col_type}")
 
         cur.execute(
             """

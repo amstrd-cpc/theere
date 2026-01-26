@@ -35,6 +35,19 @@ class AuthManager:
                     last_activity TIMESTAMP
                 )
             """)
+            cursor.execute("PRAGMA table_info(user_sessions)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            expected_columns = {
+                "user_id": "INTEGER",
+                "username": "TEXT",
+                "first_name": "TEXT",
+                "authenticated_at": "TIMESTAMP",
+                "expires_at": "TIMESTAMP",
+                "last_activity": "TIMESTAMP",
+            }
+            for column, col_type in expected_columns.items():
+                if column not in existing_columns:
+                    cursor.execute(f"ALTER TABLE user_sessions ADD COLUMN {column} {col_type}")
             conn.commit()
     
     def hash_password(self, password):

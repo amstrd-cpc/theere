@@ -30,6 +30,7 @@ from inventory import create_inventory_conversation, create_inventory_edit_conve
 from db import get_db, init_db
 import inventory as inventory_utils
 import reports
+from reports import log_sale_to_report_db
 from woocommerce_client import WooNotConfigured, fetch_orders, is_configured
 from woocommerce_sync import sync_inventory_to_woo
 from config import ADMIN_CHAT_ID, BOT_TOKEN
@@ -239,6 +240,11 @@ def mark_order_processed(order_id: int):
         conn.commit()
 
 
+def _auto_sell_enabled() -> bool:
+    value = (os.getenv("AUTO_SELL_WOO", "1") or "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def process_woo_order(order: dict) -> dict:
     """
     Process a WooCommerce order payload.
@@ -287,6 +293,22 @@ def process_woo_order(order: dict) -> dict:
             "already_processed": False,
             "skipped": True,
             "skip_reason": f"Order status '{status}' is not eligible for auto-sell.",
+        }
+
+    if not _auto_sell_enabled():
+        mark_order_processed(order_id)
+        return {
+            "order_id": order_id,
+            "status": status,
+            "payment_method": order.get("payment_method"),
+            "billing_name": f"{order.get('billing', {}).get('first_name', '')} {order.get('billing', {}).get('last_name', '')}".strip(),
+            "items": [],
+            "unmatched": [],
+            "currency": order.get("currency"),
+            "order_total": order.get("total"),
+            "already_processed": False,
+            "skipped": True,
+            "skip_reason": "AUTO_SELL_WOO is disabled; notification only.",
         }
 
     items = []
