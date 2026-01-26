@@ -46,7 +46,7 @@ def fetch_usd_to_gel():
     return 1.0
 
 
-def save_to_inventory(row):
+def save_to_inventory(row) -> int:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -55,6 +55,21 @@ def save_to_inventory(row):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             row,
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def set_inventory_woo_link(item_id: int, woo_product_id: int) -> None:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE inventory
+            SET woo_product_id = ?, woo_synced = 1, woo_last_synced_at = ?
+            WHERE id = ?
+            """,
+            (str(woo_product_id), datetime.utcnow().isoformat(), item_id),
         )
         conn.commit()
 
@@ -274,7 +289,7 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
     ]
 
     try:
-        save_to_inventory(row)
+        inventory_id = save_to_inventory(row)
         name_display = supplier_name if supplier_name else next((n for i, n in get_suppliers() if i == supplier_id), "")
         await update.effective_message.reply_text(
             f"✅ {qty} copy(ies) of '{release.title}' added from {name_display} at {price:.2f} GEL each."
@@ -288,6 +303,7 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
 
             try:
                 product_payload = WooSync(WooConfig.from_env()).build_product_payload(
+                    inventory_id=inventory_id,
                     release_id=int(getattr(release, "id", 0) or 0),
                     title=str(release.title),
                     price_gel=float(price),
@@ -308,6 +324,8 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     res = await upsert_product_async(product_payload)
                     pid = res.get("id")
+                    if pid:
+                        set_inventory_woo_link(inventory_id, int(pid))
                     if chat_id is not None:
                         await app.bot.send_message(chat_id=chat_id, text=f"Woo sync OK. Product id: {pid}")
                 except Exception as e:

@@ -57,6 +57,7 @@ class WooConfig:
     consumer_secret: str
     api_base: str = "/wp-json/wc/v3"
     timeout_s: int = 25
+    verify_ssl: bool = True
 
     @staticmethod
     def from_env() -> "WooConfig":
@@ -69,7 +70,17 @@ class WooConfig:
                 "(WOO_URL / WOO_CONSUMER_KEY / WOO_CONSUMER_SECRET also supported)"
             )
         url, api_base = _parse_wc_api_url(raw_url)
-        return WooConfig(url=url, consumer_key=ck, consumer_secret=cs, api_base=api_base)
+        timeout_raw = (os.getenv("WC_REQUEST_TIMEOUT") or "").strip()
+        verify_ssl = (os.getenv("WC_VERIFY_SSL", "true") or "true").strip().lower() == "true"
+        timeout_s = int(timeout_raw) if timeout_raw.isdigit() else 25
+        return WooConfig(
+            url=url,
+            consumer_key=ck,
+            consumer_secret=cs,
+            api_base=api_base,
+            timeout_s=timeout_s,
+            verify_ssl=verify_ssl,
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -92,11 +103,13 @@ class WooSync:
             json=json,
             auth=(self.cfg.consumer_key, self.cfg.consumer_secret),
             timeout=self.cfg.timeout_s,
+            verify=self.cfg.verify_ssl,
         )
 
     def build_product_payload(
         self,
         *,
+        inventory_id: int | None = None,
         release_id: int,
         title: str,
         price_gel: float,
@@ -115,7 +128,10 @@ class WooSync:
         pass image_url.
         """
         safe_release = int(release_id) if release_id else 0
-        sku = f"discogs-{safe_release}-{condition}" if safe_release else (f"record-{title}-{condition}"[:40])
+        if inventory_id is not None:
+            sku = str(int(inventory_id))
+        else:
+            sku = f"discogs-{safe_release}-{condition}" if safe_release else (f"record-{title}-{condition}"[:40])
 
         desc = (
             f"Condition: {condition}\n"
@@ -142,6 +158,9 @@ class WooSync:
                 {"key": "supplier", "value": supplier_name},
             ],
         }
+
+        if inventory_id is not None:
+            payload["meta_data"].append({"key": "inventory_id", "value": str(inventory_id)})
 
         if image_url:
             payload["images"] = [{"src": image_url}]
