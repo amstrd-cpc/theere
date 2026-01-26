@@ -263,95 +263,123 @@ async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        supplier_id = int(update.callback_query.data.split("_")[1])
-        supplier_name = None
-        await update.callback_query.answer()
-    else:
-        supplier_name = update.message.text.strip()
-        supplier_id = get_or_create_supplier(supplier_name)
-
-    release = context.user_data["release"]
-    cond = context.user_data["condition"]
-    price = context.user_data["final_price"]
-    qty = context.user_data["quantity"]
-
-    row = [
-        str(release.title),
-        safe_join_list(release.genres),
-        safe_join_list(release.styles),
-        safe_get_labels(release),
-        safe_get_format(release),
-        str(cond),
-        float(price),
-        int(qty),
-        supplier_id,
-    ]
-
     try:
-        inventory_id = save_to_inventory(row)
-        name_display = supplier_name if supplier_name else next((n for i, n in get_suppliers() if i == supplier_id), "")
-        await update.effective_message.reply_text(
-            f"✅ {qty} copy(ies) of '{release.title}' added from {name_display} at {price:.2f} GEL each."
-        )
-
-        # --- Woo sync in background (non-blocking) ---
-        if woo_is_configured():
-            logger.info(
-                "Woo sync triggered for inventory_id=%s supplier_id=%s",
-                inventory_id,
-                supplier_id,
-            )
-            await update.effective_message.reply_text("Woo sync: started in background...")
-            chat_id = update.effective_chat.id if update.effective_chat else None
-            app = context.application
-
-            try:
-                product_payload = WooSync(WooConfig.from_env()).build_product_payload(
-                    inventory_id=inventory_id,
-                    release_id=int(getattr(release, "id", 0) or 0),
-                    title=str(release.title),
-                    price_gel=float(price),
-                    quantity=int(qty),
-                    condition=str(cond),
-                    supplier_name=name_display or "Unknown",
-                    genres=safe_join_list(release.genres),
-                    styles=safe_join_list(release.styles),
-                    labels=safe_get_labels(release),
-                    vinyl_format=safe_get_format(release),
+        if update.callback_query:
+            query = update.callback_query
+            await query.answer()
+            if not context.user_data or "release" not in context.user_data:
+                await update.effective_message.reply_text(
+                    "⚠️ This supplier button is from an old /add session. Run /add again."
                 )
-            except Exception as e:
-                logger.exception("Failed to build Woo payload")
-                await update.effective_message.reply_text(f"Woo sync: failed to build payload: {e}")
                 return ConversationHandler.END
-
-            async def _run_woo_sync() -> None:
-                try:
-                    res = await upsert_product_async(product_payload)
-                    pid = res.get("id")
-                    if pid:
-                        set_inventory_woo_link(inventory_id, int(pid))
-                    if chat_id is not None:
-                        await app.bot.send_message(chat_id=chat_id, text=f"Woo sync OK. Product id: {pid}")
-                except Exception as e:
-                    logger.exception("Woo sync failed")
-                    if chat_id is not None:
-                        await app.bot.send_message(chat_id=chat_id, text=f"Woo sync FAILED: {e}")
-
-            app.create_task(_run_woo_sync())
+            supplier_id = int(query.data.split("_")[1])
+            supplier_name = None
+            logger.info("Supplier callback received: supplier_id=%s", supplier_id)
         else:
-            logger.info("Woo env vars not set; skipping Woo sync")
-    except Exception as e:
-        await update.effective_message.reply_text(f"❌ Error saving to inventory: {str(e)}")
-        print(f"Error details: {e}")
-        print(f"Row data: {row}")
+            supplier_name = update.message.text.strip()
+            supplier_id = get_or_create_supplier(supplier_name)
+            logger.info("Supplier text received: supplier_name=%s", supplier_name)
+
+        release = context.user_data["release"]
+        cond = context.user_data["condition"]
+        price = context.user_data["final_price"]
+        qty = context.user_data["quantity"]
+
+        row = [
+            str(release.title),
+            safe_join_list(release.genres),
+            safe_join_list(release.styles),
+            safe_get_labels(release),
+            safe_get_format(release),
+            str(cond),
+            float(price),
+            int(qty),
+            supplier_id,
+        ]
+
+        try:
+            inventory_id = save_to_inventory(row)
+            logger.info("Inventory saved: inventory_id=%s supplier_id=%s", inventory_id, supplier_id)
+            name_display = supplier_name if supplier_name else next(
+                (n for i, n in get_suppliers() if i == supplier_id),
+                "",
+            )
+            await update.effective_message.reply_text(
+                f"✅ {qty} copy(ies) of '{release.title}' added from {name_display} at {price:.2f} GEL each."
+            )
+
+            # --- Woo sync in background (non-blocking) ---
+            if woo_is_configured():
+                logger.info(
+                    "Woo sync starting: inventory_id=%s supplier_id=%s",
+                    inventory_id,
+                    supplier_id,
+                )
+                chat_id = update.effective_chat.id if update.effective_chat else None
+                app = context.application
+
+                try:
+                    product_payload = WooSync(WooConfig.from_env()).build_product_payload(
+                        inventory_id=inventory_id,
+                        release_id=int(getattr(release, "id", 0) or 0),
+                        title=str(release.title),
+                        price_gel=float(price),
+                        quantity=int(qty),
+                        condition=str(cond),
+                        supplier_name=name_display or "Unknown",
+                        genres=safe_join_list(release.genres),
+                        styles=safe_join_list(release.styles),
+                        labels=safe_get_labels(release),
+                        vinyl_format=safe_get_format(release),
+                    )
+                except Exception as e:
+                    logger.exception("Failed to build Woo payload")
+                    await update.effective_message.reply_text(f"🛒 Woo sync FAILED: {e}")
+                    return ConversationHandler.END
+
+                async def _run_woo_sync() -> None:
+                    try:
+                        res = await upsert_product_async(product_payload)
+                        pid = res.get("id")
+                        if pid:
+                            set_inventory_woo_link(inventory_id, int(pid))
+                        logger.info("Woo sync OK: inventory_id=%s product_id=%s", inventory_id, pid)
+                        if chat_id is not None:
+                            await app.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"🛒 Woo sync OK. Product id: {pid}",
+                            )
+                    except Exception as e:
+                        logger.exception("Woo sync failed")
+                        if chat_id is not None:
+                            await app.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"🛒 Woo sync FAILED: {e}",
+                            )
+
+                app.create_task(_run_woo_sync())
+            else:
+                logger.info("Woo env vars not set; skipping Woo sync")
+                await update.effective_message.reply_text("🛒 Woo sync skipped (not configured).")
+        except Exception as e:
+            await update.effective_message.reply_text(f"❌ Error saving to inventory: {str(e)}")
+            logger.exception("Error saving inventory row")
+            print(f"Error details: {e}")
+            print(f"Row data: {row}")
+    except Exception:
+        logger.exception("Unhandled error in supplier handler")
 
     return ConversationHandler.END
 
 # Backwards-compatibility: older bot.py versions import this name.
 async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Alias for the supplier callback handler used in older versions."""
-    return await handle_supplier_input(update, context)
+    """Handle stale supplier callbacks without relying on user_data."""
+    if update.callback_query:
+        await update.callback_query.answer()
+    await update.effective_message.reply_text(
+        "⚠️ This supplier button is from an old /add session. Run /add again."
+    )
+    return ConversationHandler.END
 
 async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel the add flow from any state."""
