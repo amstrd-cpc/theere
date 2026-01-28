@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from db.connection import get_db, get_inventory_db, get_sales_db
 from db.migrations import migrate
 
