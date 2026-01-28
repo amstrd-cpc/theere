@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from services.inventory_service import get_inventory_by_id, reduce_inventory_quantity, search_inventory, update_inventory_fields
@@ -48,7 +49,10 @@ async def sell_flow_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def sell_flow_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
 
     selected_index = int(query.data.split("_")[1])
     selected_item = context.user_data["found_items"][selected_index]
@@ -98,7 +102,10 @@ async def sell_flow_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def sell_flow_more(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
 
     if query.data == "more":
         await query.edit_message_text(messages.SELL_NEXT_PROMPT)
@@ -114,7 +121,10 @@ async def sell_flow_more(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def sell_flow_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
 
     payment_method = query.data.split("_")[1]
     cart = context.user_data.get("cart", [])
