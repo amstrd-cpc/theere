@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import math
 from typing import Optional
 
 import requests
@@ -11,21 +10,20 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandl
 
 from services.inventory_service import (
     get_inventory_by_id,
-    get_inventory_page,
     get_low_stock,
+    search_inventory,
     update_inventory_fields,
     update_inventory_supplier,
 )
 from services.runtime import run_blocking
 from services.woo_service import is_configured
-from woocommerce_client import payload_for_update_from_inventory, update_product_by_id
 from telegram_ui import messages
 from telegram_ui.auth import require_auth
+from woocommerce_client import payload_for_update_from_inventory, update_product_by_id
 
 logger = logging.getLogger(__name__)
 
-LISTING, EDITING = range(2)
-PAGE_SIZE = 8
+SEARCHING, LISTING, EDITING = range(3)
 
 EDIT_FIELD_PROMPTS = {
     "name": messages.INVENTORY_EDIT_PROMPT_NAME,
@@ -33,6 +31,11 @@ EDIT_FIELD_PROMPTS = {
     "quantity": messages.INVENTORY_EDIT_PROMPT_QUANTITY,
     "condition": messages.INVENTORY_EDIT_PROMPT_CONDITION,
     "genre": messages.INVENTORY_EDIT_PROMPT_GENRE,
+    "style": "Enter the new style (or 'none' to clear):",
+    "label": "Enter the new label (or 'none' to clear):",
+    "format": "Enter the new format (or 'none' to clear):",
+    "year": "Enter the new year (or 'none' to clear):",
+    "description": "Enter the new description (or 'none' to clear):",
     "supplier": messages.INVENTORY_EDIT_PROMPT_SUPPLIER,
 }
 
@@ -72,22 +75,13 @@ def _format_detail(item: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_inventory_keyboard(items: list[dict], page: int, total: int) -> InlineKeyboardMarkup:
+def _build_search_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     buttons = []
     for item in items:
         text = f"{item.get('artist_album', 'Item')} (Qty: {item.get('quantity', 0)})"
         if len(text) > 60:
             text = text[:57] + "..."
         buttons.append([InlineKeyboardButton(text, callback_data=f"inventory_item:{item['id']}")])
-
-    total_pages = max(1, math.ceil(total / PAGE_SIZE))
-    nav_buttons = []
-    if page > 1:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"inventory_page:{page - 1}"))
-    if page < total_pages:
-        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"inventory_page:{page + 1}"))
-    if nav_buttons:
-        buttons.append(nav_buttons)
     return InlineKeyboardMarkup(buttons)
 
 
@@ -97,7 +91,12 @@ def _build_edit_menu(item_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Edit Price", callback_data=f"inventory_edit:price:{item_id}")],
         [InlineKeyboardButton("Edit Quantity", callback_data=f"inventory_edit:quantity:{item_id}")],
         [InlineKeyboardButton("Edit Condition", callback_data=f"inventory_edit:condition:{item_id}")],
-        [InlineKeyboardButton("Edit Category/Genre", callback_data=f"inventory_edit:genre:{item_id}")],
+        [InlineKeyboardButton("Edit Genre", callback_data=f"inventory_edit:genre:{item_id}")],
+        [InlineKeyboardButton("Edit Style", callback_data=f"inventory_edit:style:{item_id}")],
+        [InlineKeyboardButton("Edit Label", callback_data=f"inventory_edit:label:{item_id}")],
+        [InlineKeyboardButton("Edit Format", callback_data=f"inventory_edit:format:{item_id}")],
+        [InlineKeyboardButton("Edit Year", callback_data=f"inventory_edit:year:{item_id}")],
+        [InlineKeyboardButton("Edit Description", callback_data=f"inventory_edit:description:{item_id}")],
         [InlineKeyboardButton("Edit Supplier", callback_data=f"inventory_edit:supplier:{item_id}")],
         [InlineKeyboardButton("Sync to Woo", callback_data=f"inventory_sync:{item_id}")],
         [InlineKeyboardButton("Back", callback_data="inventory_back")],
@@ -112,31 +111,28 @@ def _normalize_optional_value(value: str) -> Optional[str]:
     return cleaned
 
 
-async def _show_inventory_page(target, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
-    items, total = await run_blocking(get_inventory_page, page, PAGE_SIZE)
-    if total == 0:
-        if hasattr(target, "edit_message_text"):
-            await target.edit_message_text(messages.INVENTORY_PAGE_EMPTY)
-        else:
-            await target.message.reply_text(messages.INVENTORY_PAGE_EMPTY)
+async def _send_message(target, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None) -> None:
+    if hasattr(target, "edit_message_text"):
+        await target.edit_message_text(text, reply_markup=reply_markup)
+        return
+    await target.message.reply_text(text, reply_markup=reply_markup)
+
+
+async def _show_search_results(target, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
+    items = await run_blocking(search_inventory, query)
+    context.user_data["inventory_search_query"] = query
+    if not items:
+        await _send_message(target, messages.INVENTORY_NO_RESULTS.format(query=query))
         return
 
-    total_pages = max(1, math.ceil(total / PAGE_SIZE))
-    normalized_page = max(1, min(page, total_pages))
-    if normalized_page != page:
-        page = normalized_page
-        items, total = await run_blocking(get_inventory_page, page, PAGE_SIZE)
-    context.user_data["inventory_page"] = page
-    message = f"{messages.INVENTORY_PAGE_TITLE.format(page=page, total_pages=total_pages)}\n"
-    message += messages.INVENTORY_FOUND.format(count=total)
-    for i, item in enumerate(items, 1 + (page - 1) * PAGE_SIZE):
+    message = f"{messages.INVENTORY_SEARCH_TITLE.format(query=query)}\n"
+    message += messages.INVENTORY_FOUND.format(count=len(items))
+    message += messages.INVENTORY_SELECT_PROMPT + "\n\n"
+    for i, item in enumerate(items, 1):
         message += _format_inventory_item(item, i)
 
-    keyboard = _build_inventory_keyboard(items, page, total)
-    if hasattr(target, "edit_message_text"):
-        await target.edit_message_text(message, reply_markup=keyboard)
-    else:
-        await target.message.reply_text(message, reply_markup=keyboard)
+    keyboard = _build_search_keyboard(items)
+    await _send_message(target, message, reply_markup=keyboard)
 
 
 async def _show_edit_menu(query, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
@@ -150,7 +146,19 @@ async def _show_edit_menu(query, context: ContextTypes.DEFAULT_TYPE, item_id: in
 
 @require_auth
 async def start_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await _show_inventory_page(update, context, 1)
+    await update.message.reply_text(messages.INVENTORY_SEARCH_PROMPT)
+    return SEARCHING
+
+
+@require_auth
+async def handle_inventory_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = (update.message.text or "").strip()
+    if not query:
+        await update.message.reply_text(messages.INVENTORY_QUERY_INVALID)
+        return SEARCHING
+
+    await update.message.reply_text(messages.INVENTORY_SEARCHING)
+    await _show_search_results(update, context, query)
     return LISTING
 
 
@@ -159,11 +167,6 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     await query.answer()
     data = query.data or ""
-
-    if data.startswith("inventory_page:"):
-        page = int(data.split(":")[1])
-        await _show_inventory_page(query, context, page)
-        return LISTING
 
     if data.startswith("inventory_item:"):
         item_id = int(data.split(":")[1])
@@ -179,8 +182,11 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
         return EDITING
 
     if data == "inventory_back":
-        page = context.user_data.get("inventory_page", 1)
-        await _show_inventory_page(query, context, page)
+        search_query = context.user_data.get("inventory_search_query")
+        if not search_query:
+            await query.edit_message_text(messages.INVENTORY_USE_AGAIN)
+            return ConversationHandler.END
+        await _show_search_results(query, context, search_query)
         return LISTING
 
     if data.startswith("inventory_sync:"):
@@ -272,6 +278,31 @@ async def handle_inventory_edit(update: Update, context: ContextTypes.DEFAULT_TY
     elif field == "genre":
         genre = _normalize_optional_value(value)
         await run_blocking(update_inventory_fields, item_id, {"genre": genre})
+    elif field == "style":
+        style = _normalize_optional_value(value)
+        await run_blocking(update_inventory_fields, item_id, {"style": style})
+    elif field == "label":
+        label = _normalize_optional_value(value)
+        await run_blocking(update_inventory_fields, item_id, {"label": label})
+    elif field == "format":
+        fmt = _normalize_optional_value(value)
+        await run_blocking(update_inventory_fields, item_id, {"format": fmt})
+    elif field == "year":
+        normalized = _normalize_optional_value(value)
+        if normalized is None:
+            await run_blocking(update_inventory_fields, item_id, {"year": None})
+        else:
+            try:
+                year = int(normalized)
+                if year < 0:
+                    raise ValueError
+            except ValueError:
+                await update.message.reply_text(messages.INVENTORY_EDIT_INVALID_INTEGER)
+                return EDITING
+            await run_blocking(update_inventory_fields, item_id, {"year": year})
+    elif field == "description":
+        description = _normalize_optional_value(value)
+        await run_blocking(update_inventory_fields, item_id, {"description": description})
     elif field == "supplier":
         supplier = _normalize_optional_value(value)
         await run_blocking(update_inventory_supplier, item_id, supplier)
@@ -299,6 +330,7 @@ def create_inventory_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("inventory", start_inventory)],
         states={
+            SEARCHING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory_search)],
             LISTING: [CallbackQueryHandler(handle_inventory_callback, pattern=r"^inventory_")],
             EDITING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory_edit)],
         },

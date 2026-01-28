@@ -163,32 +163,34 @@ def get_inventory_page(page: int, page_size: int = 8) -> Tuple[List[Dict[str, An
         return items, total
 
 
-def search_inventory(query: str) -> List[Dict[str, Any]]:
+def search_inventory(query: str, limit: int = 15) -> List[Dict[str, Any]]:
     with get_inventory_db() as conn:
         cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='inventory_fts'")
         if cur.fetchone():
             cur = conn.execute(
                 """
-                SELECT inventory.*, supplier.name AS supplier_name FROM inventory
+                SELECT inventory.*, supplier.name AS supplier_name, bm25(inventory_fts) AS rank
+                FROM inventory
                 JOIN inventory_fts ON inventory_fts.rowid = inventory.id
                 LEFT JOIN supplier ON supplier.id = inventory.supplier_id
                 WHERE inventory_fts MATCH ?
-                ORDER BY inventory.created_at DESC
-                LIMIT 100
+                ORDER BY rank
+                LIMIT ?
                 """,
-                (query,),
+                (query, limit),
             )
         else:
             like = f"%{query}%"
             cur = conn.execute(
                 """
-                SELECT inventory.*, supplier.name AS supplier_name FROM inventory
+                SELECT inventory.*, supplier.name AS supplier_name
+                FROM inventory
                 LEFT JOIN supplier ON supplier.id = inventory.supplier_id
-                WHERE artist_album LIKE ? OR label LIKE ? OR genre LIKE ? OR style LIKE ?
+                WHERE artist_album LIKE ?
                 ORDER BY created_at DESC
-                LIMIT 100
+                LIMIT ?
                 """,
-                (like, like, like, like),
+                (like, limit),
             )
         return [dict(row) for row in cur.fetchall()]
 
