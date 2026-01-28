@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Any, Dict, List, Optional
 
 from db.connection import get_inventory_db
+
+logger = logging.getLogger(__name__)
+_inventory_sequence_checked = False
 
 
 def _row_to_dict(row: Any) -> Dict[str, Any]:
@@ -23,6 +27,53 @@ def get_next_inventory_id() -> int:
         return int(row["next_id"]) if row and row["next_id"] is not None else 1
 
 
+def ensure_inventory_sequence() -> None:
+    global _inventory_sequence_checked
+    if _inventory_sequence_checked:
+        return
+
+    with get_inventory_db() as conn:
+        cur = conn.execute("SELECT COALESCE(MAX(id), 0) FROM inventory")
+        row = cur.fetchone()
+        local_max_id = int(row[0] or 0) if row else 0
+
+        max_woo_sku = 0
+        from services import woo_service
+
+        if woo_service.is_configured():
+            page = 1
+            per_page = 100
+            while True:
+                products = woo_service.fetch_products_page(page=page, per_page=per_page)
+                if not products:
+                    break
+                for product in products:
+                    sku = str(product.get("sku") or "").strip()
+                    if sku.isdigit():
+                        max_woo_sku = max(max_woo_sku, int(sku))
+                if len(products) < per_page:
+                    break
+                page += 1
+
+        target_seq = max(local_max_id, max_woo_sku)
+        conn.execute(
+            "INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES ('inventory', ?)",
+            (target_seq,),
+        )
+        conn.execute(
+            "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'inventory'",
+            (target_seq,),
+        )
+        conn.commit()
+        _inventory_sequence_checked = True
+        logger.info(
+            "Ensured inventory sequence at %s (local max=%s, Woo max=%s)",
+            target_seq,
+            local_max_id,
+            max_woo_sku,
+        )
+
+
 def get_or_create_supplier(name: str) -> int:
     with get_inventory_db() as conn:
         cur = conn.execute("SELECT id FROM supplier WHERE name = ?", (name,))
@@ -35,6 +86,7 @@ def get_or_create_supplier(name: str) -> int:
 
 
 def insert_inventory(item: Dict[str, Any]) -> int:
+    ensure_inventory_sequence()
     with get_inventory_db() as conn:
         cur = conn.execute(
             """
