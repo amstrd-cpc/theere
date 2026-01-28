@@ -226,16 +226,18 @@ def category_names_from_inventory(item: Dict[str, Any]) -> List[str]:
 
 def _build_short_description(item: Dict[str, Any]) -> str:
     product_type = (item.get("product_type") or "record").lower()
-    supplier_name = (item.get("supplier_name") or "").strip()
+    tracklist = item.get("tracklist") or []
+    tracklist_html = format_tracklist(tracklist)
 
     if product_type == "other":
         category_text = (item.get("genre") or "").strip()
         lines = []
         if category_text:
             lines.append(f"Category: {category_text}")
-        if supplier_name:
-            lines.append(f"Supplier: {supplier_name}")
-        return "\n".join(lines)
+        summary = "\n".join(lines)
+        if tracklist_html:
+            return "\n".join(filter(None, [summary, tracklist_html]))
+        return summary
 
     label = (item.get("label") or "N/A").strip() or "N/A"
     fmt = (item.get("format") or "N/A").strip() or "N/A"
@@ -245,9 +247,10 @@ def _build_short_description(item: Dict[str, Any]) -> str:
         f"Format: {fmt}",
         f"Condition: {condition}",
     ]
-    if supplier_name:
-        lines.append(f"Supplier: {supplier_name}")
-    return "\n".join(lines)
+    summary = "\n".join(lines)
+    if tracklist_html:
+        return "\n".join([summary, tracklist_html])
+    return summary
 
 
 def _build_description(item: Dict[str, Any]) -> str:
@@ -255,10 +258,6 @@ def _build_description(item: Dict[str, Any]) -> str:
     notes = (item.get("description") or "").strip()
     if notes:
         parts.append(f"<p>{notes}</p>")
-    tracklist = item.get("tracklist") or []
-    tracklist_html = format_tracklist(tracklist)
-    if tracklist_html:
-        parts.append(tracklist_html)
     return "".join(parts)
 
 
