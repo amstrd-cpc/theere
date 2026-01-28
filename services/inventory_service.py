@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from db.connection import get_inventory_db
 
@@ -130,9 +130,37 @@ def update_inventory_sync(item_id: int, woo_product_id: int, sync_hash: str) -> 
 
 def get_inventory_by_id(item_id: int) -> Optional[Dict[str, Any]]:
     with get_inventory_db() as conn:
-        cur = conn.execute("SELECT * FROM inventory WHERE id = ?", (item_id,))
+        cur = conn.execute(
+            """
+            SELECT inventory.*, supplier.name AS supplier_name
+            FROM inventory
+            LEFT JOIN supplier ON supplier.id = inventory.supplier_id
+            WHERE inventory.id = ?
+            """,
+            (item_id,),
+        )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def get_inventory_page(page: int, page_size: int = 8) -> Tuple[List[Dict[str, Any]], int]:
+    offset = max(page - 1, 0) * page_size
+    with get_inventory_db() as conn:
+        cur = conn.execute("SELECT COUNT(1) AS total FROM inventory")
+        total_row = cur.fetchone()
+        total = int(total_row["total"] or 0) if total_row else 0
+        cur = conn.execute(
+            """
+            SELECT inventory.*, supplier.name AS supplier_name
+            FROM inventory
+            LEFT JOIN supplier ON supplier.id = inventory.supplier_id
+            ORDER BY inventory.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (page_size, offset),
+        )
+        items = [dict(row) for row in cur.fetchall()]
+        return items, total
 
 
 def search_inventory(query: str) -> List[Dict[str, Any]]:
@@ -141,8 +169,9 @@ def search_inventory(query: str) -> List[Dict[str, Any]]:
         if cur.fetchone():
             cur = conn.execute(
                 """
-                SELECT inventory.* FROM inventory
+                SELECT inventory.*, supplier.name AS supplier_name FROM inventory
                 JOIN inventory_fts ON inventory_fts.rowid = inventory.id
+                LEFT JOIN supplier ON supplier.id = inventory.supplier_id
                 WHERE inventory_fts MATCH ?
                 ORDER BY inventory.created_at DESC
                 LIMIT 100
@@ -153,7 +182,8 @@ def search_inventory(query: str) -> List[Dict[str, Any]]:
             like = f"%{query}%"
             cur = conn.execute(
                 """
-                SELECT * FROM inventory
+                SELECT inventory.*, supplier.name AS supplier_name FROM inventory
+                LEFT JOIN supplier ON supplier.id = inventory.supplier_id
                 WHERE artist_album LIKE ? OR label LIKE ? OR genre LIKE ? OR style LIKE ?
                 ORDER BY created_at DESC
                 LIMIT 100
@@ -165,7 +195,14 @@ def search_inventory(query: str) -> List[Dict[str, Any]]:
 
 def get_all_inventory() -> List[Dict[str, Any]]:
     with get_inventory_db() as conn:
-        cur = conn.execute("SELECT * FROM inventory ORDER BY created_at DESC")
+        cur = conn.execute(
+            """
+            SELECT inventory.*, supplier.name AS supplier_name
+            FROM inventory
+            LEFT JOIN supplier ON supplier.id = inventory.supplier_id
+            ORDER BY inventory.created_at DESC
+            """
+        )
         return [dict(row) for row in cur.fetchall()]
 
 
@@ -207,6 +244,8 @@ def reduce_inventory_quantity(item_id: int, amount: int) -> bool:
 
 
 def update_inventory_fields(item_id: int, fields: Dict[str, Any]) -> None:
+    if not fields:
+        return
     keys = sorted(fields.keys())
     assignments = ", ".join(f"{key} = ?" for key in keys)
     values = [fields[key] for key in keys]
@@ -216,3 +255,10 @@ def update_inventory_fields(item_id: int, fields: Dict[str, Any]) -> None:
             (*values, item_id),
         )
         conn.commit()
+
+
+def update_inventory_supplier(item_id: int, supplier_name: Optional[str]) -> None:
+    supplier_id: Optional[int] = None
+    if supplier_name:
+        supplier_id = get_or_create_supplier(supplier_name)
+    update_inventory_fields(item_id, {"supplier_id": supplier_id})

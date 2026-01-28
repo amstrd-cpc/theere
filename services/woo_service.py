@@ -307,6 +307,25 @@ def payload_from_inventory(item: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def payload_for_update_from_inventory(item: Dict[str, Any]) -> Dict[str, Any]:
+    name = item.get("artist_album") or "Unknown"
+    price = float(item.get("price_gel") or 0)
+    quantity = int(item.get("quantity") or 0)
+    short_description = _build_short_description(item)
+    description = _build_description(item)
+    payload: Dict[str, Any] = {
+        "name": name,
+        "regular_price": f"{price:.2f}",
+        "manage_stock": True,
+        "stock_quantity": quantity,
+        "short_description": short_description,
+        "categories": _build_categories(item),
+    }
+    if description:
+        payload["description"] = description
+    return payload
+
+
 def compute_sync_hash(payload: Dict[str, Any]) -> str:
     raw = str(sorted(payload.items())).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -322,6 +341,10 @@ def create_product(payload: Dict[str, Any]) -> Dict[str, Any]:
 def update_product(product_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     response = _request("PUT", f"/products/{product_id}", json=payload)
     return response.json()
+
+
+def update_product_by_id(product_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return update_product(product_id, payload)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
