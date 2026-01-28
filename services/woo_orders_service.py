@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 from typing import Any, Dict
 
 from db.connection import get_inventory_db
-from services.inventory_service import get_inventory_by_id, reduce_inventory_quantity, update_inventory_fields
+from services.inventory_service import (
+    get_inventory_by_id,
+    get_inventory_by_woo_product_id,
+    update_inventory_fields,
+)
 from services.sales_service import record_sale
+
+logger = logging.getLogger(__name__)
 
 
 def _auto_sell_enabled() -> bool:
@@ -37,8 +44,10 @@ def process_woo_order(order: Dict[str, Any]) -> Dict[str, Any]:
 
     status = (order.get("status") or "").lower().strip()
     eligible_statuses = {"processing", "completed"}
+    logger.info("Woo order received id=%s status=%s", order_id, status or "unknown")
 
     if is_order_processed(order_id):
+        logger.info("Woo order %s already processed (dedupe hit)", order_id)
         return {
             "order_id": order_id,
             "status": status,
@@ -53,6 +62,7 @@ def process_woo_order(order: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     if status and status not in eligible_statuses:
+        logger.info("Woo order %s skipped due to status=%s", order_id, status)
         return {
             "order_id": order_id,
             "status": status,
@@ -69,6 +79,7 @@ def process_woo_order(order: Dict[str, Any]) -> Dict[str, Any]:
 
     if not _auto_sell_enabled():
         mark_order_processed(order_id)
+        logger.info("Woo auto-sell disabled; order %s recorded without inventory changes", order_id)
         return {
             "order_id": order_id,
             "status": status,
@@ -91,17 +102,25 @@ def process_woo_order(order: Dict[str, Any]) -> Dict[str, Any]:
     for line in order.get("line_items", []):
         sku = line.get("sku")
         qty = int(line.get("quantity", 1))
-        if not sku:
-            unmatched.append(line)
-            continue
-        try:
+        item_id = None
+        inv = None
+        if sku and str(sku).strip().isdigit():
             item_id = int(sku)
-        except (TypeError, ValueError):
-            unmatched.append(line)
-            continue
-
-        inv = get_inventory_by_id(item_id)
+            inv = get_inventory_by_id(item_id)
         if not inv:
+            product_id = line.get("product_id")
+            if product_id:
+                inv = get_inventory_by_woo_product_id(int(product_id))
+                if inv:
+                    item_id = int(inv["id"])
+
+        if not inv or not item_id:
+            logger.warning(
+                "Woo line item unmatched (sku=%s product_id=%s name=%s)",
+                sku,
+                line.get("product_id"),
+                line.get("name"),
+            )
             unmatched.append(line)
             continue
 
@@ -113,24 +132,25 @@ def process_woo_order(order: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             per_price = 0.0
 
-        if not reduce_inventory_quantity(item_id, qty):
-            unmatched.append(line)
-            continue
-
-        for _ in range(qty):
-            record_sale(inv, per_price, payment_method)
-
+        current_qty = int(inv.get("quantity") or 0)
+        new_qty = max(0, current_qty - qty)
         update_inventory_fields(
             item_id,
             {
+                "quantity": new_qty,
                 "woo_synced": 1,
                 "woo_last_synced_at": datetime.datetime.utcnow().isoformat(),
             },
         )
+        logger.info("Woo stock decrement id=%s: %s -> %s", item_id, current_qty, new_qty)
 
-        items.append((inv, qty, per_price))
+        for _ in range(qty):
+            record_sale(inv, per_price, payment_method)
+        logger.info("Woo mapped item sku=%s product_id=%s -> inventory=%s qty=%s", sku, line.get("product_id"), item_id, qty)
+        items.append((inv, qty, per_price, new_qty))
 
     mark_order_processed(order_id)
+    logger.info("Woo order %s marked processed", order_id)
 
     return {
         "order_id": order_id,

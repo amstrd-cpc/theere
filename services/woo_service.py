@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import mimetypes
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -52,6 +53,15 @@ def _base_url() -> str:
         version = suffix.split("/")[0]
         return f"{prefix}/wp-json/wc/{version}"
     return base.rstrip("/") + "/wp-json/wc/v3"
+
+
+def _wp_base_url() -> str:
+    settings = _settings()
+    base = settings["base_url"].rstrip("/")
+    if "/wp-json/wc/" in base:
+        prefix, _, _ = base.partition("/wp-json/wc/")
+        return f"{prefix}/wp-json/wp/v2"
+    return base.rstrip("/") + "/wp-json/wp/v2"
 
 
 def _request(method: str, path: str, **kwargs: Any) -> requests.Response:
@@ -175,11 +185,14 @@ def _build_categories(item: Dict[str, Any]) -> List[Dict[str, Any]]:
         turntables_id = _ensure_category("Turntables", parent_id=gear_id)
         category_ids.extend([gear_id, turntables_id])
     elif product_type == "other":
-        other_root = _ensure_category("Other")
-        category_ids.append(other_root)
+        sounds_id = _ensure_category("Sounds")
+        vinyl_id = _ensure_category("Vinyl", parent_id=sounds_id)
+        category_ids.extend([sounds_id, vinyl_id])
         category_text = (item.get("genre") or "").strip()
         if category_text:
-            category_ids.append(_ensure_category(category_text, parent_id=other_root))
+            category_ids.append(_ensure_category(category_text, parent_id=vinyl_id))
+        else:
+            category_ids.append(_ensure_category("Other", parent_id=vinyl_id))
     else:
         sounds_id = _ensure_category("Sounds")
         vinyl_id = _ensure_category("Vinyl", parent_id=sounds_id)
@@ -209,10 +222,12 @@ def category_names_from_inventory(item: Dict[str, Any]) -> List[str]:
     if product_type == "turntable":
         names = ["Gear", "Turntables"]
     elif product_type == "other":
-        names = ["Other"]
+        names = ["Sounds", "Vinyl"]
         category_text = (item.get("genre") or "").strip()
         if category_text:
             names.append(category_text)
+        else:
+            names.append("Other")
     else:
         names = ["Sounds", "Vinyl", "Electronic"]
         genres = _split_categories(item.get("genre"))
@@ -231,10 +246,13 @@ def _build_short_description(item: Dict[str, Any]) -> str:
 
     if product_type == "other":
         category_text = (item.get("genre") or "").strip()
+        supplier_name = (item.get("supplier_name") or "").strip()
         lines = []
         if category_text:
             lines.append(f"Category: {category_text}")
-        summary = "\n".join(lines)
+        if supplier_name:
+            lines.append(f"Supplier: {supplier_name}")
+        summary = "<br>".join(lines)
         if tracklist_html:
             return "\n".join(filter(None, [summary, tracklist_html]))
         return summary
@@ -298,9 +316,13 @@ def payload_from_inventory(item: Dict[str, Any]) -> Dict[str, Any]:
         "description": description,
         "categories": _build_categories(item),
     }
-    cover_url = item.get("cover_url")
-    if cover_url:
-        payload["images"] = [{"src": cover_url}]
+    images = item.get("woo_images") or []
+    if images:
+        payload["images"] = images
+    else:
+        cover_url = item.get("cover_url")
+        if cover_url:
+            payload["images"] = [{"src": cover_url}]
     metadata = _build_metadata(item)
     if metadata:
         payload["meta_data"] = metadata
@@ -350,6 +372,28 @@ def update_product_by_id(product_id: int, payload: Dict[str, Any]) -> Dict[str, 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
 def update_stock(product_id: int, quantity: int) -> None:
     _request("PUT", f"/products/{product_id}", json={"stock_quantity": quantity, "manage_stock": True})
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
+def upload_media(file_bytes: bytes, filename: str, content_type: str | None = None) -> Dict[str, Any]:
+    url = f"{_wp_base_url()}/media"
+    settings = _settings()
+    resolved_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Type": resolved_type,
+    }
+    logger.info("Uploading Woo media %s (%s bytes)", filename, len(file_bytes))
+    response = requests.post(
+        url,
+        data=file_bytes,
+        headers=headers,
+        auth=_build_auth(),
+        timeout=30,
+        verify=settings["verify"],
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
