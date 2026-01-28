@@ -6,6 +6,7 @@ from typing import Optional
 
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from services.inventory_service import (
@@ -165,7 +166,10 @@ async def handle_inventory_search(update: Update, context: ContextTypes.DEFAULT_
 @require_auth
 async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
     data = query.data or ""
 
     if data.startswith("inventory_item:"):

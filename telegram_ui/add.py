@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from services import discogs_service
@@ -88,7 +89,10 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_add_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.callback_query:
         return CHOOSE_TYPE
-    await update.callback_query.answer()
+    try:
+        await update.callback_query.answer()
+    except BadRequest:
+        pass
     choice = update.callback_query.data
     if choice == "addtype_record":
         settings = load_settings()
@@ -147,6 +151,11 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except BadRequest:
+            pass
     if update.callback_query.data == "next":
         context.user_data["page"] += 1
     elif update.callback_query.data == "prev":
@@ -155,6 +164,11 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except BadRequest:
+            pass
     idx = int(update.callback_query.data.split("_")[1])
     selected = context.user_data["results"][idx]
     release_id = selected.get("id")
@@ -174,6 +188,11 @@ async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def handle_condition_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except BadRequest:
+            pass
     cond = update.callback_query.data.split("_")[1]
     context.user_data["condition"] = cond
     release = context.user_data["release"]
@@ -231,10 +250,14 @@ async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except BadRequest:
+            pass
     try:
         if update.callback_query:
             query = update.callback_query
-            await query.answer()
             if not context.user_data or "release" not in context.user_data:
                 if context.user_data.get("product_type") != "other":
                     await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
@@ -382,7 +405,10 @@ async def handle_other_quantity(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
-        await update.callback_query.answer()
+        try:
+            await update.callback_query.answer()
+        except BadRequest:
+            pass
     await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
     return ConversationHandler.END
 
@@ -390,7 +416,10 @@ async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT
 async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     if update.callback_query:
-        await update.callback_query.answer()
+        try:
+            await update.callback_query.answer()
+        except BadRequest:
+            pass
         await update.callback_query.edit_message_text(messages.ADD_CANCEL)
     else:
         await update.message.reply_text(messages.ADD_CANCEL)
