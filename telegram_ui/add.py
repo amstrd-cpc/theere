@@ -219,8 +219,12 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
         price = context.user_data["final_price"]
         qty = context.user_data["quantity"]
 
+        artist_name = discogs_service.extract_artists(release)
+        release_title = str(release.get("title") or "Unknown")
+        artist_album = f"{artist_name} - {release_title}" if artist_name != "Unknown" else release_title
+
         item = {
-            "artist_album": str(release.get("title")),
+            "artist_album": artist_album,
             "genre": discogs_service.safe_join_list(release.get("genres")),
             "style": discogs_service.safe_join_list(release.get("styles")),
             "label": discogs_service.extract_labels(release),

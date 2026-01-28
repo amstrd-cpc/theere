@@ -76,6 +76,13 @@ def _slugify(value: str) -> str:
     return value.lower().strip().replace("/", "-").replace(" ", "-")
 
 
+def _split_categories(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    parts = [part.strip() for part in value.split(",")]
+    return [part for part in parts if part]
+
+
 def _build_categories(item: Dict[str, Any]) -> List[Dict[str, Any]]:
     categories = []
     product_type = (item.get("product_type") or "record").lower()
@@ -86,23 +93,18 @@ def _build_categories(item: Dict[str, Any]) -> List[Dict[str, Any]]:
         categories.append({"name": "Sounds"})
         categories.append({"name": "Vinyl"})
         genre = item.get("genre")
-        if genre:
-            categories.append({"name": genre})
+        style = item.get("style")
+        for name in _split_categories(genre):
+            categories.append({"name": name})
+        for name in _split_categories(style):
+            categories.append({"name": name})
     return categories
 
 
 def _build_short_description(item: Dict[str, Any]) -> str:
     tracklist = item.get("tracklist") or []
     tracklist_html = format_tracklist(tracklist)
-    base_lines = []
-    label = item.get("label") or "N/A"
-    fmt = item.get("format") or "N/A"
-    condition = item.get("condition") or "N/A"
-    base_lines.append(f"<strong>Label:</strong> {label}")
-    base_lines.append(f"<strong>Format:</strong> {fmt}")
-    base_lines.append(f"<strong>Condition:</strong> {condition}")
-    base_html = "<br/>".join(base_lines)
-    return base_html + (tracklist_html or "")
+    return tracklist_html or ""
 
 
 def payload_from_inventory(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -117,6 +119,7 @@ def payload_from_inventory(item: Dict[str, Any]) -> Dict[str, Any]:
         "manage_stock": True,
         "stock_quantity": quantity,
         "short_description": _build_short_description(item),
+        "description": "",
         "categories": _build_categories(item),
     }
     cover_url = item.get("cover_url")
