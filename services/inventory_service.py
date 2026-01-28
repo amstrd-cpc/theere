@@ -16,6 +16,13 @@ def get_suppliers() -> List[Dict[str, Any]]:
         return [dict(row) for row in cur.fetchall()]
 
 
+def get_next_inventory_id() -> int:
+    with get_inventory_db() as conn:
+        cur = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM inventory")
+        row = cur.fetchone()
+        return int(row["next_id"]) if row and row["next_id"] is not None else 1
+
+
 def get_or_create_supplier(name: str) -> int:
     with get_inventory_db() as conn:
         cur = conn.execute("SELECT id FROM supplier WHERE name = ?", (name,))

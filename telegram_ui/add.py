@@ -10,14 +10,27 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandl
 
 from services import discogs_service
 from config.settings import load_settings
-from services.inventory_service import get_or_create_supplier, get_suppliers, insert_inventory, get_inventory_by_id, update_inventory_sync
+from services.inventory_service import (
+    get_next_inventory_id,
+    get_or_create_supplier,
+    get_suppliers,
+    insert_inventory,
+    get_inventory_by_id,
+    update_inventory_sync,
+)
 from services.runtime import run_blocking
-from services.woo_service import WooNotConfigured, upsert_product_from_inventory, compute_sync_hash
+from services.woo_service import (
+    WooNotConfigured,
+    category_names_from_inventory,
+    payload_from_inventory,
+    upsert_product_from_inventory,
+    compute_sync_hash,
+)
 from telegram_ui import messages
 
 logger = logging.getLogger(__name__)
 
-SEARCH_INPUT, SHOW_RESULTS, ASK_CONDITION, ASK_PRICE, ASK_QUANTITY, ASK_SUPPLIER = range(6)
+CHOOSE_TYPE, SEARCH_INPUT, SHOW_RESULTS, ASK_CONDITION, ASK_PRICE, ASK_QUANTITY, ASK_SUPPLIER, OTHER_CATEGORY, OTHER_NAME, OTHER_PRICE, OTHER_QUANTITY = range(11)
 CONDITION_OPTIONS = ["m", "nm", "vg+", "vg", "g+", "g", "f", "p"]
 
 
@@ -55,14 +68,41 @@ def _fetch_usd_to_gel() -> float:
 
 
 async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    settings = load_settings()
-    if not settings.discogs_token:
-        await update.message.reply_text(messages.ADD_DISCOGS_MISSING)
-        return ConversationHandler.END
-
-    await update.message.reply_text(messages.ADD_PROMPT_QUERY)
     context.user_data.clear()
-    return SEARCH_INPUT
+    next_id = await run_blocking(get_next_inventory_id)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(messages.ADD_TYPE_RECORD, callback_data="addtype_record"),
+                InlineKeyboardButton(messages.ADD_TYPE_OTHER, callback_data="addtype_other"),
+            ]
+        ]
+    )
+    await update.message.reply_text(
+        f"{messages.ADD_NEXT_ID_HINT.format(next_id=next_id)}\n\n{messages.ADD_TYPE_PROMPT}",
+        reply_markup=keyboard,
+    )
+    return CHOOSE_TYPE
+
+
+async def handle_add_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.callback_query:
+        return CHOOSE_TYPE
+    await update.callback_query.answer()
+    choice = update.callback_query.data
+    if choice == "addtype_record":
+        settings = load_settings()
+        if not settings.discogs_token:
+            await update.callback_query.edit_message_text(messages.ADD_DISCOGS_MISSING)
+            return ConversationHandler.END
+        context.user_data["product_type"] = "record"
+        await update.callback_query.edit_message_text(messages.ADD_PROMPT_QUERY)
+        return SEARCH_INPUT
+    if choice == "addtype_other":
+        context.user_data["product_type"] = "other"
+        await update.callback_query.edit_message_text(messages.ADD_OTHER_CATEGORY_PROMPT)
+        return OTHER_CATEGORY
+    return CHOOSE_TYPE
 
 
 async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,17 +226,7 @@ async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TY
         return ASK_QUANTITY
 
     context.user_data["quantity"] = qty
-    suppliers = await run_blocking(get_suppliers)
-    if suppliers:
-        buttons = [
-            [InlineKeyboardButton(row["name"], callback_data=f"sup_{row['id']}")]
-            for row in suppliers
-        ]
-        await update.message.reply_text(
-            messages.ADD_SELECT_SUPPLIER, reply_markup=InlineKeyboardMarkup(buttons)
-        )
-    else:
-        await update.message.reply_text(messages.ADD_SUPPLIER_PROMPT)
+    await _prompt_supplier(update, context)
     return ASK_SUPPLIER
 
 
@@ -206,41 +236,67 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
             query = update.callback_query
             await query.answer()
             if not context.user_data or "release" not in context.user_data:
-                await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
-                return ConversationHandler.END
+                if context.user_data.get("product_type") != "other":
+                    await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
+                    return ConversationHandler.END
+            if query.data == "sup_other":
+                await update.effective_message.reply_text(messages.ADD_SUPPLIER_PROMPT)
+                return ASK_SUPPLIER
             supplier_id = int(query.data.split("_")[1])
-            supplier_name = None
+            supplier_name = (context.user_data.get("suppliers_by_id") or {}).get(supplier_id)
         else:
             supplier_name = update.message.text.strip()
             supplier_id = await run_blocking(get_or_create_supplier, supplier_name)
 
-        release = context.user_data["release"]
-        cond = context.user_data["condition"]
-        price = context.user_data["final_price"]
-        qty = context.user_data["quantity"]
+        product_type = context.user_data.get("product_type", "record")
+        if product_type == "record":
+            release = context.user_data["release"]
+            cond = context.user_data["condition"]
+            price = context.user_data["final_price"]
+            qty = context.user_data["quantity"]
 
-        artist_name = discogs_service.extract_artists(release)
-        release_title = str(release.get("title") or "Unknown")
-        artist_album = f"{artist_name} - {release_title}" if artist_name != "Unknown" else release_title
+            artist_name = discogs_service.extract_artists(release)
+            release_title = str(release.get("title") or "Unknown")
+            artist_album = f"{artist_name} - {release_title}" if artist_name != "Unknown" else release_title
 
-        item = {
-            "artist_album": artist_album,
-            "genre": discogs_service.safe_join_list(release.get("genres")),
-            "style": discogs_service.safe_join_list(release.get("styles")),
-            "label": discogs_service.extract_labels(release),
-            "format": discogs_service.extract_formats(release),
-            "condition": str(cond),
-            "price_gel": float(price),
-            "quantity": int(qty),
-            "supplier_id": supplier_id,
-            "product_type": "record",
-            "year": release.get("year"),
-            "description": release.get("notes"),
-            "tracklist": release.get("tracklist") or [],
-            "cover_url": discogs_service.extract_cover_url(release),
-        }
+            item = {
+                "artist_album": artist_album,
+                "genre": discogs_service.safe_join_list(release.get("genres"), default=""),
+                "style": discogs_service.safe_join_list(release.get("styles"), default=""),
+                "label": discogs_service.extract_labels(release),
+                "format": discogs_service.extract_formats(release),
+                "condition": str(cond),
+                "price_gel": float(price),
+                "quantity": int(qty),
+                "supplier_id": supplier_id,
+                "product_type": "record",
+                "year": release.get("year"),
+                "description": release.get("notes"),
+                "tracklist": release.get("tracklist") or [],
+                "cover_url": discogs_service.extract_cover_url(release),
+                "discogs_release_id": release.get("id"),
+                "discogs_master_id": release.get("master_id"),
+                "discogs_uri": release.get("uri"),
+                "supplier_name": supplier_name,
+            }
+        else:
+            item = {
+                "artist_album": context.user_data["manual_name"],
+                "genre": context.user_data["manual_category"],
+                "style": "",
+                "label": "N/A",
+                "format": "N/A",
+                "condition": "N/A",
+                "price_gel": float(context.user_data["manual_price"]),
+                "quantity": int(context.user_data["manual_quantity"]),
+                "supplier_id": supplier_id,
+                "product_type": "other",
+                "description": f"Category: {context.user_data['manual_category']}",
+                "supplier_name": supplier_name,
+            }
 
         inventory_id = await run_blocking(insert_inventory, item)
+        logger.info("Inserted inventory row id=%s (type=%s)", inventory_id, product_type)
         await update.effective_message.reply_text(
             messages.ADD_SAVED_LOCAL.format(inventory_id=inventory_id)
         )
@@ -250,9 +306,13 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
             raise RuntimeError("Inventory insert failed")
 
         inventory_row.update({
-            "product_type": "record",
+            "product_type": product_type,
             "tracklist": item.get("tracklist"),
             "cover_url": item.get("cover_url"),
+            "discogs_release_id": item.get("discogs_release_id"),
+            "discogs_master_id": item.get("discogs_master_id"),
+            "discogs_uri": item.get("discogs_uri"),
+            "supplier_name": supplier_name,
         })
 
         try:
@@ -267,16 +327,57 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             woo_id = woo_product.get("id")
             if woo_id:
-                sync_hash = compute_sync_hash(woo_product)
+                sync_hash = compute_sync_hash(payload_from_inventory(inventory_row))
                 await run_blocking(update_inventory_sync, inventory_id, int(woo_id), sync_hash)
+            category_names = ", ".join(category_names_from_inventory(inventory_row))
             await update.effective_message.reply_text(
-                messages.ADD_WOO_OK.format(woo_id=woo_id)
+                messages.ADD_WOO_OK_DETAILS.format(
+                    inventory_id=inventory_id,
+                    woo_id=woo_id,
+                    categories=category_names or "N/A",
+                )
             )
     except Exception as exc:
         logger.exception("Error saving inventory row")
         await update.effective_message.reply_text(messages.ADD_SAVE_ERROR.format(error=str(exc)))
 
     return ConversationHandler.END
+
+
+async def handle_other_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["manual_category"] = update.message.text.strip()
+    await update.message.reply_text(messages.ADD_OTHER_NAME_PROMPT)
+    return OTHER_NAME
+
+
+async def handle_other_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["manual_name"] = update.message.text.strip()
+    await update.message.reply_text(messages.ADD_OTHER_PRICE_PROMPT)
+    return OTHER_PRICE
+
+
+async def handle_other_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        price = float(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text(messages.ADD_OTHER_PRICE_INVALID)
+        return OTHER_PRICE
+    context.user_data["manual_price"] = round(price, 2)
+    await update.message.reply_text(messages.ADD_QUANTITY_PROMPT)
+    return OTHER_QUANTITY
+
+
+async def handle_other_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        qty = int(update.message.text.strip())
+        if qty < 1:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(messages.ADD_QUANTITY_INVALID)
+        return OTHER_QUANTITY
+    context.user_data["manual_quantity"] = qty
+    await _prompt_supplier(update, context)
+    return ASK_SUPPLIER
 
 
 async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -296,10 +397,27 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def _prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    suppliers = await run_blocking(get_suppliers)
+    if suppliers:
+        context.user_data["suppliers_by_id"] = {row["id"]: row["name"] for row in suppliers}
+        buttons = [
+            [InlineKeyboardButton(row["name"], callback_data=f"sup_{row['id']}")]
+            for row in suppliers
+        ]
+        buttons.append([InlineKeyboardButton("Other", callback_data="sup_other")])
+        await update.effective_message.reply_text(
+            messages.ADD_SELECT_SUPPLIER, reply_markup=InlineKeyboardMarkup(buttons)
+        )
+    else:
+        await update.effective_message.reply_text(messages.ADD_SUPPLIER_PROMPT)
+
+
 def start_add_flow() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("add", start_add)],
         states={
+            CHOOSE_TYPE: [CallbackQueryHandler(handle_add_type, pattern=r"^addtype_")],
             SEARCH_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search)],
             SHOW_RESULTS: [
                 CallbackQueryHandler(handle_release_select, pattern=r"^select_"),
@@ -309,9 +427,13 @@ def start_add_flow() -> ConversationHandler:
             ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price_input)],
             ASK_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_quantity_input)],
             ASK_SUPPLIER: [
-                CallbackQueryHandler(handle_supplier_input, pattern=r"^sup_\d+"),
+                CallbackQueryHandler(handle_supplier_input, pattern=r"^sup_(\d+|other)$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_supplier_input),
             ],
+            OTHER_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_category)],
+            OTHER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_name)],
+            OTHER_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_price)],
+            OTHER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_quantity)],
         },
         fallbacks=[CommandHandler("cancel", cancel_add)],
         name="add_record",
