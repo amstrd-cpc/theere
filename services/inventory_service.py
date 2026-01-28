@@ -57,11 +57,11 @@ def ensure_inventory_sequence() -> None:
 
         target_seq = max(local_max_id, max_woo_sku)
         conn.execute(
-            """
-            INSERT INTO sqlite_sequence(name, seq)
-            VALUES ('inventory', ?)
-            ON CONFLICT(name) DO UPDATE SET seq=MAX(seq, excluded.seq)
-            """,
+            "INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES ('inventory', ?)",
+            (target_seq,),
+        )
+        conn.execute(
+            "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'inventory'",
             (target_seq,),
         )
         conn.commit()
