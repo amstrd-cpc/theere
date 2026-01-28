@@ -188,15 +188,7 @@ SELL_ERROR_PROCESSING = "❌ Error processing sale: {error}"
 SELL_PAYMENT_LINE = "Payment: {method}"
 SELL_TOTAL_LINE = "Total: ₾{total:.2f}"
 
-INVENTORY_SEARCH_PROMPT = (
-    "🔍 Inventory Search\n\n"
-    "Please enter your search query:\n"
-    "• Artist name (e.g., 'Beatles')\n"
-    "• Album name (e.g., 'Abbey Road')\n"
-    "• Partial match (e.g., 'Dark Side')\n"
-    "• Or type 'all' to see everything\n\n"
-    "Type /cancel to cancel this operation."
-)
+INVENTORY_SEARCH_PROMPT = "Enter name to search inventory"
 INVENTORY_QUERY_INVALID = "❌ Please enter a valid search query or type /cancel to cancel."
 INVENTORY_SEARCHING = "🔍 Searching inventory..."
 INVENTORY_NO_RESULTS = (
