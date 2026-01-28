@@ -54,7 +54,11 @@ def load_settings() -> Settings:
     wc_verify_ssl = os.getenv("WC_VERIFY_SSL", "true").lower() not in {"0", "false", "no"}
     db_path = os.getenv("RECORDSTORE_DB_FILE") or os.getenv("DB_PATH") or "clime_db.db"
     sales_db_path = os.getenv("SALES_DB_PATH")
-    webhook_secret = os.getenv("WC_WEBHOOK_SECRET") or os.getenv("WEBHOOK_SECRET")
+    webhook_secret = (
+        os.getenv("WOO_WEBHOOK_SECRET")
+        or os.getenv("WC_WEBHOOK_SECRET")
+        or os.getenv("WEBHOOK_SECRET")
+    )
 
     return Settings(
         bot_token=bot_token,

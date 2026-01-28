@@ -75,7 +75,7 @@ def main() -> None:
     application.add_handler(CommandHandler("stock", low_stock))
 
     application.add_handler(start_add_flow())
-    application.add_handler(CallbackQueryHandler(orphan_supplier_callback, pattern=r"^sup_(\d+|other)$"), group=1)
+    application.add_handler(CallbackQueryHandler(orphan_supplier_callback, pattern=r"^add:supplier:"), group=1)
     application.add_handler(start_sell_flow())
     application.add_handler(create_inventory_conversation())
     register_inventory_callbacks(application)

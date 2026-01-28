@@ -143,6 +143,21 @@ def get_inventory_by_id(item_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+def get_inventory_by_woo_product_id(woo_product_id: int) -> Optional[Dict[str, Any]]:
+    with get_inventory_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT inventory.*, supplier.name AS supplier_name
+            FROM inventory
+            LEFT JOIN supplier ON supplier.id = inventory.supplier_id
+            WHERE inventory.woo_product_id = ?
+            """,
+            (woo_product_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def get_inventory_page(page: int, page_size: int = 8) -> Tuple[List[Dict[str, Any]], int]:
     offset = max(page - 1, 0) * page_size
     with get_inventory_db() as conn:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import os
+import uuid
+from datetime import datetime, timedelta
 from typing import Any, Dict
 
 import requests
@@ -18,6 +20,7 @@ from services.inventory_service import (
     insert_inventory,
     get_inventory_by_id,
     update_inventory_sync,
+    update_inventory_fields,
 )
 from services.runtime import run_blocking
 from services.woo_service import (
@@ -26,13 +29,30 @@ from services.woo_service import (
     payload_from_inventory,
     upsert_product_from_inventory,
     compute_sync_hash,
+    upload_media,
 )
 from telegram_ui import messages
 
 logger = logging.getLogger(__name__)
 
-CHOOSE_TYPE, SEARCH_INPUT, SHOW_RESULTS, ASK_CONDITION, ASK_PRICE, ASK_QUANTITY, ASK_SUPPLIER, OTHER_CATEGORY, OTHER_NAME, OTHER_PRICE, OTHER_QUANTITY = range(11)
+(
+    CHOOSE_TYPE,
+    SEARCH_INPUT,
+    SHOW_RESULTS,
+    ASK_CONDITION,
+    ASK_PRICE,
+    ASK_QUANTITY,
+    ASK_SUPPLIER,
+    OTHER_CATEGORY,
+    OTHER_NAME,
+    OTHER_PRICE,
+    OTHER_QUANTITY,
+    OTHER_DESCRIPTION,
+    OTHER_PHOTOS,
+    CONFIRM,
+) = range(14)
 CONDITION_OPTIONS = ["m", "nm", "vg+", "vg", "g+", "g", "f", "p"]
+ADD_SESSION_TTL = timedelta(minutes=30)
 
 
 def _format_release_button(item: Dict[str, Any]) -> str:
@@ -68,14 +88,66 @@ def _fetch_usd_to_gel() -> float:
     return 1.0
 
 
+def _start_add_session(context: ContextTypes.DEFAULT_TYPE) -> str:
+    session_id = uuid.uuid4().hex[:8]
+    context.user_data["add_session_id"] = session_id
+    context.user_data["add_session_started_at"] = datetime.utcnow()
+    logger.info("Started /add session %s", session_id)
+    return session_id
+
+
+async def _ack_callback(update: Update) -> None:
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except BadRequest:
+            pass
+
+
+def _parse_add_callback(data: str) -> tuple[str, str, list[str]] | None:
+    parts = data.split(":")
+    if len(parts) < 3 or parts[0] != "add":
+        return None
+    action = parts[1]
+    session_id = parts[2]
+    rest = parts[3:]
+    return action, session_id, rest
+
+
+async def _validate_add_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not update.callback_query:
+        return True
+    parsed = _parse_add_callback(update.callback_query.data)
+    if not parsed:
+        logger.warning("Missing add session data in callback: %s", update.callback_query.data)
+        await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
+        return False
+    _, callback_session, _ = parsed
+    stored_session = context.user_data.get("add_session_id")
+    started_at = context.user_data.get("add_session_started_at")
+    expired = not isinstance(started_at, datetime) or datetime.utcnow() - started_at > ADD_SESSION_TTL
+    if callback_session != stored_session or expired:
+        logger.info(
+            "Add session invalid (callback=%s stored=%s expired=%s)",
+            callback_session,
+            stored_session,
+            expired,
+        )
+        await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
+        return False
+    logger.info("Add session validated %s", callback_session)
+    return True
+
+
 async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    session_id = _start_add_session(context)
     next_id = await run_blocking(get_next_inventory_id)
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(messages.ADD_TYPE_RECORD, callback_data="addtype_record"),
-                InlineKeyboardButton(messages.ADD_TYPE_OTHER, callback_data="addtype_other"),
+                InlineKeyboardButton(messages.ADD_TYPE_RECORD, callback_data=f"add:type:{session_id}:record"),
+                InlineKeyboardButton(messages.ADD_TYPE_OTHER, callback_data=f"add:type:{session_id}:other"),
             ]
         ]
     )
@@ -89,12 +161,15 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_add_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.callback_query:
         return CHOOSE_TYPE
-    try:
-        await update.callback_query.answer()
-    except BadRequest:
-        pass
-    choice = update.callback_query.data
-    if choice == "addtype_record":
+    await _ack_callback(update)
+    if not await _validate_add_session(update, context):
+        return ConversationHandler.END
+    parsed = _parse_add_callback(update.callback_query.data)
+    if not parsed:
+        return ConversationHandler.END
+    _, _, rest = parsed
+    choice = rest[0] if rest else ""
+    if choice == "record":
         settings = load_settings()
         if not settings.discogs_token:
             await update.callback_query.edit_message_text(messages.ADD_DISCOGS_MISSING)
@@ -102,7 +177,7 @@ async def handle_add_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["product_type"] = "record"
         await update.callback_query.edit_message_text(messages.ADD_PROMPT_QUERY)
         return SEARCH_INPUT
-    if choice == "addtype_other":
+    if choice == "other":
         context.user_data["product_type"] = "other"
         await update.callback_query.edit_message_text(messages.ADD_OTHER_CATEGORY_PROMPT)
         return OTHER_CATEGORY
@@ -119,6 +194,7 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = context.user_data["page"]
     query = context.user_data["query"]
+    session_id = context.user_data.get("add_session_id", "")
     try:
         results = await run_blocking(discogs_service.search_releases, query, page, 50)
     except discogs_service.DiscogsNotConfigured:
@@ -127,15 +203,15 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["results"] = results
 
     buttons = [
-        [InlineKeyboardButton(_format_release_button(release), callback_data=f"select_{i}")]
+        [InlineKeyboardButton(_format_release_button(release), callback_data=f"add:select:{session_id}:{i}")]
         for i, release in enumerate(results)
     ]
 
     nav_buttons = []
     if page > 1:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data="prev"))
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"add:page:{session_id}:prev"))
     if len(results) == 50:
-        nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data="next"))
+        nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"add:page:{session_id}:next"))
     if nav_buttons:
         buttons.append(nav_buttons)
 
@@ -151,35 +227,44 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        try:
-            await update.callback_query.answer()
-        except BadRequest:
-            pass
-    if update.callback_query.data == "next":
+    await _ack_callback(update)
+    if not await _validate_add_session(update, context):
+        return ConversationHandler.END
+    parsed = _parse_add_callback(update.callback_query.data)
+    if not parsed:
+        return ConversationHandler.END
+    _, _, rest = parsed
+    direction = rest[0] if rest else ""
+    if direction == "next":
         context.user_data["page"] += 1
-    elif update.callback_query.data == "prev":
+    elif direction == "prev":
         context.user_data["page"] = max(1, context.user_data["page"] - 1)
     return await show_results(update, context)
 
 
 async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        try:
-            await update.callback_query.answer()
-        except BadRequest:
-            pass
-    idx = int(update.callback_query.data.split("_")[1])
+    await _ack_callback(update)
+    if not await _validate_add_session(update, context):
+        return ConversationHandler.END
+    parsed = _parse_add_callback(update.callback_query.data)
+    if not parsed:
+        return ConversationHandler.END
+    _, _, rest = parsed
+    idx = int(rest[0])
     selected = context.user_data["results"][idx]
     release_id = selected.get("id")
     release = await run_blocking(discogs_service.fetch_release, int(release_id))
     context.user_data["release"] = release
+    session_id = context.user_data.get("add_session_id", "")
 
     await update.callback_query.edit_message_text(
         messages.ADD_SELECT_CONDITION.format(title=release.get("title", "")),
         reply_markup=InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton(c, callback_data=f"cond_{c}") for c in CONDITION_OPTIONS[i:i + 4]]
+                [
+                    InlineKeyboardButton(c, callback_data=f"add:cond:{session_id}:{c}")
+                    for c in CONDITION_OPTIONS[i:i + 4]
+                ]
                 for i in range(0, len(CONDITION_OPTIONS), 4)
             ]
         ),
@@ -188,12 +273,14 @@ async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def handle_condition_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        try:
-            await update.callback_query.answer()
-        except BadRequest:
-            pass
-    cond = update.callback_query.data.split("_")[1]
+    await _ack_callback(update)
+    if not await _validate_add_session(update, context):
+        return ConversationHandler.END
+    parsed = _parse_add_callback(update.callback_query.data)
+    if not parsed:
+        return ConversationHandler.END
+    _, _, rest = parsed
+    cond = rest[0]
     context.user_data["condition"] = cond
     release = context.user_data["release"]
 
@@ -251,72 +338,66 @@ async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
-        try:
-            await update.callback_query.answer()
-        except BadRequest:
-            pass
+        await _ack_callback(update)
+        if not await _validate_add_session(update, context):
+            return ConversationHandler.END
     try:
         if update.callback_query:
             query = update.callback_query
-            if not context.user_data or "release" not in context.user_data:
-                if context.user_data.get("product_type") != "other":
-                    await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
-                    return ConversationHandler.END
-            if query.data == "sup_other":
+            parsed = _parse_add_callback(query.data)
+            if not parsed:
+                return ConversationHandler.END
+            _, _, rest = parsed
+            supplier_token = rest[0] if rest else ""
+            if supplier_token == "other":
                 await update.effective_message.reply_text(messages.ADD_SUPPLIER_PROMPT)
                 return ASK_SUPPLIER
-            supplier_id = int(query.data.split("_")[1])
+            supplier_id = int(supplier_token)
             supplier_name = (context.user_data.get("suppliers_by_id") or {}).get(supplier_id)
         else:
             supplier_name = update.message.text.strip()
             supplier_id = await run_blocking(get_or_create_supplier, supplier_name)
 
+        context.user_data["supplier_id"] = supplier_id
+        context.user_data["supplier_name"] = supplier_name
         product_type = context.user_data.get("product_type", "record")
-        if product_type == "record":
-            release = context.user_data["release"]
-            cond = context.user_data["condition"]
-            price = context.user_data["final_price"]
-            qty = context.user_data["quantity"]
+        if product_type == "other":
+            await update.effective_message.reply_text(messages.ADD_OTHER_DESCRIPTION_PROMPT)
+            return OTHER_DESCRIPTION
 
-            artist_name = discogs_service.extract_artists(release)
-            release_title = str(release.get("title") or "Unknown")
-            artist_album = f"{artist_name} - {release_title}" if artist_name != "Unknown" else release_title
+        if not context.user_data or "release" not in context.user_data:
+            await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
+            return ConversationHandler.END
 
-            item = {
-                "artist_album": artist_album,
-                "genre": discogs_service.safe_join_list(release.get("genres"), default=""),
-                "style": discogs_service.safe_join_list(release.get("styles"), default=""),
-                "label": discogs_service.extract_labels(release),
-                "format": discogs_service.extract_formats(release),
-                "condition": str(cond),
-                "price_gel": float(price),
-                "quantity": int(qty),
-                "supplier_id": supplier_id,
-                "product_type": "record",
-                "year": release.get("year"),
-                "description": release.get("notes"),
-                "tracklist": release.get("tracklist") or [],
-                "cover_url": discogs_service.extract_cover_url(release),
-                "discogs_release_id": release.get("id"),
-                "discogs_master_id": release.get("master_id"),
-                "discogs_uri": release.get("uri"),
-                "supplier_name": supplier_name,
-            }
-        else:
-            item = {
-                "artist_album": context.user_data["manual_name"],
-                "genre": context.user_data["manual_category"],
-                "style": "",
-                "label": "N/A",
-                "format": "N/A",
-                "condition": "N/A",
-                "price_gel": float(context.user_data["manual_price"]),
-                "quantity": int(context.user_data["manual_quantity"]),
-                "supplier_id": supplier_id,
-                "product_type": "other",
-                "description": f"Category: {context.user_data['manual_category']}",
-                "supplier_name": supplier_name,
-            }
+        release = context.user_data["release"]
+        cond = context.user_data["condition"]
+        price = context.user_data["final_price"]
+        qty = context.user_data["quantity"]
+
+        artist_name = discogs_service.extract_artists(release)
+        release_title = str(release.get("title") or "Unknown")
+        artist_album = f"{artist_name} - {release_title}" if artist_name != "Unknown" else release_title
+
+        item = {
+            "artist_album": artist_album,
+            "genre": discogs_service.safe_join_list(release.get("genres"), default=""),
+            "style": discogs_service.safe_join_list(release.get("styles"), default=""),
+            "label": discogs_service.extract_labels(release),
+            "format": discogs_service.extract_formats(release),
+            "condition": str(cond),
+            "price_gel": float(price),
+            "quantity": int(qty),
+            "supplier_id": supplier_id,
+            "product_type": "record",
+            "year": release.get("year"),
+            "description": release.get("notes"),
+            "tracklist": release.get("tracklist") or [],
+            "cover_url": discogs_service.extract_cover_url(release),
+            "discogs_release_id": release.get("id"),
+            "discogs_master_id": release.get("master_id"),
+            "discogs_uri": release.get("uri"),
+            "supplier_name": supplier_name,
+        }
 
         inventory_id = await run_blocking(insert_inventory, item)
         logger.info("Inserted inventory row id=%s (type=%s)", inventory_id, product_type)
@@ -403,23 +484,176 @@ async def handle_other_quantity(update: Update, context: ContextTypes.DEFAULT_TY
     return ASK_SUPPLIER
 
 
-async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
+async def handle_other_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["manual_description"] = update.message.text.strip()
+    context.user_data["other_photos"] = []
+    session_id = context.user_data.get("add_session_id", "")
+    buttons = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(messages.ADD_OTHER_PHOTOS_DONE, callback_data=f"add:photos:{session_id}:done"),
+                InlineKeyboardButton(messages.ADD_OTHER_PHOTOS_CANCEL, callback_data=f"add:photos:{session_id}:cancel"),
+            ]
+        ]
+    )
+    await update.message.reply_text(messages.ADD_OTHER_PHOTOS_PROMPT, reply_markup=buttons)
+    return OTHER_PHOTOS
+
+
+async def handle_other_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photos = context.user_data.setdefault("other_photos", [])
+    if not update.message.photo:
+        return OTHER_PHOTOS
+    file_id = update.message.photo[-1].file_id
+    photos.append(file_id)
+    session_id = context.user_data.get("add_session_id", "")
+    buttons = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(messages.ADD_OTHER_PHOTOS_DONE, callback_data=f"add:photos:{session_id}:done"),
+                InlineKeyboardButton(messages.ADD_OTHER_PHOTOS_CANCEL, callback_data=f"add:photos:{session_id}:cancel"),
+            ]
+        ]
+    )
+    await update.message.reply_text(messages.ADD_OTHER_PHOTOS_REMINDER, reply_markup=buttons)
+    return OTHER_PHOTOS
+
+
+async def handle_other_photo_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _ack_callback(update)
+    if not await _validate_add_session(update, context):
+        return ConversationHandler.END
+    parsed = _parse_add_callback(update.callback_query.data)
+    if not parsed:
+        return ConversationHandler.END
+    _, _, rest = parsed
+    action = rest[0] if rest else ""
+    if action == "cancel":
+        return await cancel_add(update, context)
+    if action != "done":
+        return OTHER_PHOTOS
+    if not context.user_data.get("other_photos"):
+        await update.effective_message.reply_text(messages.ADD_OTHER_PHOTOS_REQUIRED)
+        return OTHER_PHOTOS
+    session_id = context.user_data.get("add_session_id", "")
+    confirm_buttons = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(messages.ADD_OTHER_CONFIRM_TITLE, callback_data=f"add:confirm:{session_id}:yes"),
+                InlineKeyboardButton(messages.ADD_OTHER_CANCEL_TITLE, callback_data=f"add:confirm:{session_id}:cancel"),
+            ]
+        ]
+    )
+    await update.effective_message.reply_text(messages.ADD_OTHER_CONFIRM_PROMPT, reply_markup=confirm_buttons)
+    return CONFIRM
+
+
+async def handle_other_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _ack_callback(update)
+    if not await _validate_add_session(update, context):
+        return ConversationHandler.END
+    parsed = _parse_add_callback(update.callback_query.data)
+    if not parsed:
+        return ConversationHandler.END
+    _, _, rest = parsed
+    action = rest[0] if rest else ""
+    if action == "cancel":
+        return await cancel_add(update, context)
+    if action != "yes":
+        return CONFIRM
+    await _finalize_other_item(update, context)
+    return ConversationHandler.END
+
+
+async def _finalize_other_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    supplier_id = context.user_data.get("supplier_id")
+    supplier_name = context.user_data.get("supplier_name")
+    item = {
+        "artist_album": context.user_data["manual_name"],
+        "genre": context.user_data["manual_category"],
+        "style": "",
+        "label": "N/A",
+        "format": "N/A",
+        "condition": "N/A",
+        "price_gel": float(context.user_data["manual_price"]),
+        "quantity": int(context.user_data["manual_quantity"]),
+        "supplier_id": supplier_id,
+        "product_type": "other",
+        "description": context.user_data.get("manual_description"),
+        "supplier_name": supplier_name,
+    }
+    try:
+        inventory_id = await run_blocking(insert_inventory, item)
+        logger.info("Inserted inventory row id=%s (type=other)", inventory_id)
+        await update.effective_message.reply_text(messages.ADD_SAVED_LOCAL.format(inventory_id=inventory_id))
+
+        inventory_row = await run_blocking(get_inventory_by_id, inventory_id)
+        if not inventory_row:
+            raise RuntimeError("Inventory insert failed")
+
+        photos = context.user_data.get("other_photos") or []
+        woo_images: list[dict[str, Any]] = []
+        cover_url = None
+        for idx, file_id in enumerate(photos):
+            file = await context.bot.get_file(file_id)
+            file_bytes = await file.download_as_bytearray()
+            ext = os.path.splitext(file.file_path or "")[1] or ".jpg"
+            filename = f"inventory_{inventory_id}_{idx + 1}{ext}"
+            logger.info("Uploading photo %s for inventory %s", filename, inventory_id)
+            media = await run_blocking(upload_media, bytes(file_bytes), filename)
+            media_id = media.get("id")
+            if media_id:
+                woo_images.append({"id": int(media_id)})
+            if not cover_url:
+                cover_url = media.get("source_url")
+
+        inventory_row.update({
+            "product_type": "other",
+            "supplier_name": supplier_name,
+            "woo_images": woo_images,
+            "cover_url": cover_url,
+        })
+
+        if cover_url:
+            await run_blocking(update_inventory_fields, inventory_id, {"cover_url": cover_url})
+
         try:
-            await update.callback_query.answer()
-        except BadRequest:
-            pass
-    await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
+            woo_product = await run_blocking(upsert_product_from_inventory, inventory_row)
+        except WooNotConfigured:
+            await update.effective_message.reply_text(messages.ADD_WOO_NOT_CONFIGURED)
+        except Exception as exc:
+            logger.exception("Woo sync failed")
+            await update.effective_message.reply_text(
+                messages.ADD_WOO_FAILED.format(error=f"{type(exc).__name__}: {exc}")
+            )
+        else:
+            woo_id = woo_product.get("id")
+            if woo_id:
+                sync_hash = compute_sync_hash(payload_from_inventory(inventory_row))
+                await run_blocking(update_inventory_sync, inventory_id, int(woo_id), sync_hash)
+            category_names = ", ".join(category_names_from_inventory(inventory_row))
+            await update.effective_message.reply_text(
+                messages.ADD_WOO_OK_DETAILS.format(
+                    inventory_id=inventory_id,
+                    woo_id=woo_id,
+                    categories=category_names or "N/A",
+                )
+            )
+    except Exception as exc:
+        logger.exception("Error saving other inventory row")
+        await update.effective_message.reply_text(messages.ADD_SAVE_ERROR.format(error=str(exc)))
+
+
+async def orphan_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _ack_callback(update)
+    if not await _validate_add_session(update, context):
+        return ConversationHandler.END
     return ConversationHandler.END
 
 
 async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     if update.callback_query:
-        try:
-            await update.callback_query.answer()
-        except BadRequest:
-            pass
         await update.callback_query.edit_message_text(messages.ADD_CANCEL)
     else:
         await update.message.reply_text(messages.ADD_CANCEL)
@@ -428,13 +662,14 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     suppliers = await run_blocking(get_suppliers)
+    session_id = context.user_data.get("add_session_id", "")
     if suppliers:
         context.user_data["suppliers_by_id"] = {row["id"]: row["name"] for row in suppliers}
         buttons = [
-            [InlineKeyboardButton(row["name"], callback_data=f"sup_{row['id']}")]
+            [InlineKeyboardButton(row["name"], callback_data=f"add:supplier:{session_id}:{row['id']}")]
             for row in suppliers
         ]
-        buttons.append([InlineKeyboardButton("Other", callback_data="sup_other")])
+        buttons.append([InlineKeyboardButton("Other", callback_data=f"add:supplier:{session_id}:other")])
         await update.effective_message.reply_text(
             messages.ADD_SELECT_SUPPLIER, reply_markup=InlineKeyboardMarkup(buttons)
         )
@@ -446,23 +681,29 @@ def start_add_flow() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("add", start_add)],
         states={
-            CHOOSE_TYPE: [CallbackQueryHandler(handle_add_type, pattern=r"^addtype_")],
+            CHOOSE_TYPE: [CallbackQueryHandler(handle_add_type, pattern=r"^add:type:")],
             SEARCH_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search)],
             SHOW_RESULTS: [
-                CallbackQueryHandler(handle_release_select, pattern=r"^select_"),
-                CallbackQueryHandler(handle_pagination, pattern="^(next|prev)$"),
+                CallbackQueryHandler(handle_release_select, pattern=r"^add:select:"),
+                CallbackQueryHandler(handle_pagination, pattern=r"^add:page:"),
             ],
-            ASK_CONDITION: [CallbackQueryHandler(handle_condition_select, pattern=r"^cond_")],
+            ASK_CONDITION: [CallbackQueryHandler(handle_condition_select, pattern=r"^add:cond:")],
             ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price_input)],
             ASK_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_quantity_input)],
             ASK_SUPPLIER: [
-                CallbackQueryHandler(handle_supplier_input, pattern=r"^sup_(\d+|other)$"),
+                CallbackQueryHandler(handle_supplier_input, pattern=r"^add:supplier:"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_supplier_input),
             ],
             OTHER_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_category)],
             OTHER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_name)],
             OTHER_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_price)],
             OTHER_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_quantity)],
+            OTHER_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_description)],
+            OTHER_PHOTOS: [
+                MessageHandler(filters.PHOTO, handle_other_photo),
+                CallbackQueryHandler(handle_other_photo_action, pattern=r"^add:photos:"),
+            ],
+            CONFIRM: [CallbackQueryHandler(handle_other_confirm, pattern=r"^add:confirm:")],
         },
         fallbacks=[CommandHandler("cancel", cancel_add)],
         name="add_record",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from telegram import Bot
 
@@ -67,50 +67,17 @@ async def _send_order_notification(bot: Bot, info: Dict[str, Any], admin_chat_id
     if not admin_chat_id:
         return
     order_id = info.get("order_id")
-    status = info.get("status") or "unknown"
-    payment = info.get("payment_method") or "unknown"
-    billing_name = info.get("billing_name") or "N/A"
-    currency = info.get("currency") or ""
-    total = info.get("order_total") or "0"
     items = info.get("items", [])
-    unmatched = info.get("unmatched", [])
     already = info.get("already_processed", False)
     skipped = info.get("skipped", False)
-    skip_reason = info.get("skip_reason")
+    if already or skipped or not items:
+        return
 
-    lines: List[str] = []
-    if already:
-        lines.append("(Already processed)")
-    if skipped:
-        lines.append("(Auto-sell skipped)")
-        if skip_reason:
-            lines.append(f"Reason: {skip_reason}")
-
-    lines.append(f"New Woo order #{order_id}")
-    lines.append(f"Status: {status}")
-    lines.append(f"Payment: {payment}")
-    lines.append(f"Customer: {billing_name}")
-    lines.append("")
-    lines.append("Items:")
-
-    if not items:
-        lines.append("- (none)")
-    else:
-        for inv, qty, price in items:
-            lines.append(f"- {inv['artist_album']} x{qty} – {price} {currency} (id {inv['id']})")
-
-    if unmatched:
-        lines.append("")
-        lines.append("Unmatched items:")
-        for entry in unmatched:
-            lines.append(f"- {entry.get('name', 'Unknown')} x{entry.get('quantity')} (SKU {entry.get('sku')})")
-
-    lines.append("")
-    if (not already) and (not skipped) and items:
-        lines.append("✅ Sale recorded locally (inventory + sales updated).")
-    elif (not already) and (not skipped) and (not items):
-        lines.append("⚠️ No items were recorded locally.")
-
-    lines.append(f"Order total: {total} {currency}")
-
-    await bot.send_message(chat_id=admin_chat_id, text="\n".join(lines))
+    for inv, qty, _price, remaining in items:
+        await bot.send_message(
+            chat_id=admin_chat_id,
+            text=(
+                f"💿 SOLD: ID {inv['id']} — {inv['artist_album']} (qty {qty}). "
+                f"Remaining: {remaining}. Order #{order_id}"
+            ),
+        )
