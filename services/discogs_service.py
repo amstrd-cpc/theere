@@ -112,3 +112,9 @@ def extract_cover_url(release: Dict[str, Any]) -> Optional[str]:
     if images:
         return images[0].get("uri")
     return None
+
+
+def extract_artists(release: Dict[str, Any]) -> str:
+    artists = release.get("artists") or []
+    names = [artist.get("name") for artist in artists if artist.get("name")]
+    return ", ".join(names) if names else "Unknown"
