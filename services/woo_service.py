@@ -75,6 +75,12 @@ def find_product_by_sku(sku: str) -> Optional[Dict[str, Any]]:
     return items[0]
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
+def fetch_products_page(page: int, per_page: int = 100) -> List[Dict[str, Any]]:
+    response = _request("GET", "/products", params={"page": page, "per_page": per_page})
+    return response.json()
+
+
 def _slugify(value: str) -> str:
     return value.lower().strip().replace("/", "-").replace(" ", "-")
 
@@ -336,6 +342,12 @@ def upsert_product_from_inventory(item: Dict[str, Any]) -> Dict[str, Any]:
     payload = payload_from_inventory(item)
     existing = find_product_by_sku(str(item["id"]))
     if existing and existing.get("id"):
+        if not item.get("woo_product_id"):
+            logger.warning(
+                "Unexpected Woo product already exists for sku=%s (product id=%s)",
+                item["id"],
+                existing["id"],
+            )
         logger.info("Woo update for sku=%s (id=%s)", item["id"], existing["id"])
         return update_product(int(existing["id"]), payload)
     logger.info("Woo create for sku=%s", item["id"])
