@@ -91,6 +91,30 @@ def fetch_products_page(page: int, per_page: int = 100) -> List[Dict[str, Any]]:
     return response.json()
 
 
+def fetch_max_sku() -> int:
+    if not is_configured():
+        raise WooNotConfigured("WooCommerce not configured")
+    page = 1
+    per_page = 100
+    max_sku = 0
+    while True:
+        products = fetch_products_page(page=page, per_page=per_page)
+        if not products:
+            break
+        for product in products:
+            sku = str(product.get("sku") or "").strip()
+            if sku.isdigit():
+                max_sku = max(max_sku, int(sku))
+        if len(products) < per_page:
+            break
+        page += 1
+    return max_sku
+
+
+def fetch_next_sku() -> int:
+    return fetch_max_sku() + 1
+
+
 def _slugify(value: str) -> str:
     return value.lower().strip().replace("/", "-").replace(" ", "-")
 

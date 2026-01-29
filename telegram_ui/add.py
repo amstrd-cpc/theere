@@ -14,7 +14,6 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandl
 from services import discogs_service
 from config.settings import load_settings
 from services.inventory_service import (
-    get_next_local_inventory_id,
     get_or_create_supplier,
     get_suppliers,
     insert_inventory,
@@ -30,6 +29,7 @@ from services.woo_service import (
     upsert_product_from_inventory,
     compute_sync_hash,
     upload_media,
+    fetch_next_sku,
 )
 from telegram_ui import messages
 
@@ -142,7 +142,14 @@ async def _validate_add_session(update: Update, context: ContextTypes.DEFAULT_TY
 async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     session_id = _start_add_session(context)
-    next_id = await run_blocking(get_next_local_inventory_id)
+    try:
+        next_id = await run_blocking(fetch_next_sku)
+        next_id_hint = messages.ADD_NEXT_ID_HINT.format(next_id=next_id)
+    except WooNotConfigured:
+        next_id_hint = messages.ADD_NEXT_ID_UNAVAILABLE
+    except Exception:
+        logger.exception("Failed to fetch next Woo SKU")
+        next_id_hint = messages.ADD_NEXT_ID_UNAVAILABLE
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -152,7 +159,7 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     )
     await update.message.reply_text(
-        f"{messages.ADD_NEXT_ID_HINT.format(next_id=next_id)}\n\n{messages.ADD_TYPE_PROMPT}",
+        f"{next_id_hint}\n\n{messages.ADD_TYPE_PROMPT}",
         reply_markup=keyboard,
     )
     return CHOOSE_TYPE
