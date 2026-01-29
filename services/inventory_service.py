@@ -21,10 +21,23 @@ def get_suppliers() -> List[Dict[str, Any]]:
 
 
 def get_next_inventory_id() -> int:
+    ensure_inventory_sequence()
     with get_inventory_db() as conn:
-        cur = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM inventory")
+        cur = conn.execute(
+            """
+            SELECT
+                COALESCE(MAX(inventory.id), 0) AS max_id,
+                COALESCE(seq, 0) AS seq
+            FROM inventory
+            LEFT JOIN sqlite_sequence ON sqlite_sequence.name = 'inventory'
+            """
+        )
         row = cur.fetchone()
-        return int(row["next_id"]) if row and row["next_id"] is not None else 1
+        if not row:
+            return 1
+        max_id = int(row["max_id"] or 0)
+        seq = int(row["seq"] or 0)
+        return max(max_id, seq) + 1
 
 
 def ensure_inventory_sequence() -> None:
@@ -38,6 +51,7 @@ def ensure_inventory_sequence() -> None:
         local_max_id = int(row[0] or 0) if row else 0
 
         max_woo_sku = 0
+        max_woo_id = 0
         from services import woo_service
 
         if woo_service.is_configured():
@@ -48,6 +62,11 @@ def ensure_inventory_sequence() -> None:
                 if not products:
                     break
                 for product in products:
+                    if product.get("id"):
+                        try:
+                            max_woo_id = max(max_woo_id, int(product["id"]))
+                        except (TypeError, ValueError):
+                            pass
                     sku = str(product.get("sku") or "").strip()
                     if sku.isdigit():
                         max_woo_sku = max(max_woo_sku, int(sku))
@@ -55,7 +74,7 @@ def ensure_inventory_sequence() -> None:
                     break
                 page += 1
 
-        target_seq = max(local_max_id, max_woo_sku)
+        target_seq = max(local_max_id, max_woo_sku, max_woo_id)
         conn.execute(
             "INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES ('inventory', ?)",
             (target_seq,),
@@ -70,7 +89,7 @@ def ensure_inventory_sequence() -> None:
             "Ensured inventory sequence at %s (local max=%s, Woo max=%s)",
             target_seq,
             local_max_id,
-            max_woo_sku,
+            max(max_woo_sku, max_woo_id),
         )
 
 
