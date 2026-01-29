@@ -40,6 +40,14 @@ def get_next_inventory_id() -> int:
         return max(max_id, seq) + 1
 
 
+def get_next_local_inventory_id() -> int:
+    with get_inventory_db() as conn:
+        cur = conn.execute("SELECT id FROM inventory ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        last_id = int(row["id"]) if row and row["id"] is not None else 0
+        return last_id + 1
+
+
 def ensure_inventory_sequence() -> None:
     global _inventory_sequence_checked
     if _inventory_sequence_checked:

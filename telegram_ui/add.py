@@ -14,7 +14,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandl
 from services import discogs_service
 from config.settings import load_settings
 from services.inventory_service import (
-    get_next_inventory_id,
+    get_next_local_inventory_id,
     get_or_create_supplier,
     get_suppliers,
     insert_inventory,
@@ -142,7 +142,7 @@ async def _validate_add_session(update: Update, context: ContextTypes.DEFAULT_TY
 async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     session_id = _start_add_session(context)
-    next_id = await run_blocking(get_next_inventory_id)
+    next_id = await run_blocking(get_next_local_inventory_id)
     keyboard = InlineKeyboardMarkup(
         [
             [
