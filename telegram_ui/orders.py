@@ -9,7 +9,7 @@ from services.store_service import get_default_store
 from services.woo_service import fetch_order_by_id, update_order_status
 from jobs.worker_tasks import sync_order_state
 from services.runtime import run_blocking
-from telegram_ui.auth import require_admin, require_auth
+from telegram_ui.auth import auth_manager, require_admin, require_auth
 
 
 @require_auth
@@ -45,6 +45,9 @@ async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = query.from_user.id if query.from_user else None
     if user_id is None:
+        return
+    if not await run_blocking(auth_manager.is_authenticated, user_id):
+        await query.edit_message_text("🔒 Authentication required.")
         return
     settings = load_settings()
     if settings.admin_ids and user_id not in settings.admin_ids:

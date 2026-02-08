@@ -8,6 +8,7 @@ from services import order_service
 from services.inventory_service import get_inventory_by_id, update_inventory_fields
 from services.notification_service import notify_admin
 from services.product_map_service import (
+    find_mapping_by_internal_id,
     find_mapping_by_sku,
     find_mapping_by_woo_product_id,
     find_mapping_by_variation_id,
@@ -95,6 +96,7 @@ def apply_inventory_decrement_for_order(
         internal_id = None
         if theere_id:
             internal_id = theere_id
+            mapping = find_mapping_by_internal_id(store_id, internal_id)
         else:
             sku = (line.get("sku") or "").strip()
             if sku:
