@@ -70,12 +70,12 @@ def _should_pull_remote(
         return False
     if last_sync_hash is None:
         return True
-    if local_hash == last_sync_hash and last_sync_direction.startswith("from_"):
-        return False
     if remote_changed and not local_changed:
         return True
     if remote_changed and local_changed and remote_timestamp and last_sync_at:
         return remote_timestamp > last_sync_at
+    if local_hash == last_sync_hash and last_sync_direction.startswith("from_"):
+        return False
     return False
 
 
