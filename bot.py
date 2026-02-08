@@ -17,6 +17,7 @@ from telegram_ui.auth import check_auth_middleware, create_auth_handlers
 from telegram_ui.core import error_handler, help_command, recent_sales, start
 from telegram_ui.discogs import create_discogs_handlers
 from telegram_ui.inventory import create_inventory_conversation, low_stock, register_inventory_callbacks
+from telegram_ui.menu import create_menu_handler
 from telegram_ui.orders import create_orders_callback_handler, create_orders_handler
 from telegram_ui.product_mapping import create_map_handler
 from telegram_ui.reports import daily_report, monthly_report, report_handler, weekly_report
@@ -104,6 +105,7 @@ def main() -> None:
     application.add_handler(create_inventory_conversation())
     register_inventory_callbacks(application)
 
+    application.add_handler(create_menu_handler())
     application.add_handler(MessageHandler(filters.ALL, unauthorized_handler))
     application.add_error_handler(error_handler)
 

@@ -19,6 +19,12 @@ START_MESSAGE = (
     "🔐 *Use /login to get started\\!*"
 )
 
+MAIN_MENU_PROMPT = "Choose a section below:"
+SHOP_MENU_PROMPT = "🛍️ Shop menu: pick an action."
+WOO_MENU_PROMPT = "🛒 WooCommerce menu: pick an action."
+DISCOGS_MENU_PROMPT = "💿 Discogs menu: pick an action."
+SETTINGS_MENU_PROMPT = "⚙️ Settings menu: pick an action."
+
 HELP_AUTHENTICATED = (
     "🎵 *Record Store Bot \\- Commands* 🎵\n\n"
     "Tap any button below to run a command instantly\\.\n\n"
