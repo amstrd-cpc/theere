@@ -320,6 +320,8 @@ def _build_description(item: Dict[str, Any]) -> str:
 
 def _build_metadata(item: Dict[str, Any]) -> List[Dict[str, Any]]:
     meta = []
+    if item.get("id"):
+        meta.append({"key": "theere_id", "value": str(item["id"])})
     release_id = item.get("discogs_release_id")
     if release_id:
         meta.append({"key": "discogs_release_id", "value": str(release_id)})

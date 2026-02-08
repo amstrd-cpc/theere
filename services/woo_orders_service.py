@@ -141,6 +141,10 @@ def process_woo_order(order: Dict[str, Any]) -> Dict[str, Any]:
                 "woo_synced": 1,
                 "woo_last_synced_at": datetime.datetime.utcnow().isoformat(),
             },
+            sync_channels=False,
+            source="order_decrement",
+            correlation_id=str(order_id),
+            note=f"Woo order {order_id} decrement",
         )
         logger.info("Woo stock decrement id=%s: %s -> %s", item_id, current_qty, new_qty)
 

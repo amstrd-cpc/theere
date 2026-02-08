@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
-from services.inventory_service import get_inventory_by_id, reduce_inventory_quantity, search_inventory, update_inventory_fields
+from services.inventory_service import get_inventory_by_id, reduce_inventory_quantity, search_inventory
 from services.sales_service import record_sale
 from services.runtime import run_blocking
-from services.woo_service import WooNotConfigured, is_configured, update_stock
 from telegram_ui import messages
 
 SELL_QUERY, SELL_SELECT, SELL_PRICE, SELL_MORE, SELL_PAYMENT = range(5)
@@ -150,21 +148,6 @@ async def sell_flow_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             updated = await run_blocking(get_inventory_by_id, item["id"])
             remaining = updated["quantity"] if updated else 0
-            try:
-                if updated and is_configured():
-                    woo_id = updated.get("woo_product_id")
-                    if woo_id:
-                        await run_blocking(update_stock, int(woo_id), int(remaining))
-                        await run_blocking(
-                            update_inventory_fields,
-                            updated["id"],
-                            {
-                                "woo_synced": 1,
-                                "woo_last_synced_at": datetime.datetime.utcnow().isoformat(),
-                            },
-                        )
-            except WooNotConfigured:
-                pass
             summary_lines.append(f"{item['artist_album']} - ₾{price:.2f} (left: {remaining})")
 
         summary_lines.append(messages.SELL_PAYMENT_LINE.format(method=payment_method.upper()))

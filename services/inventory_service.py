@@ -115,11 +115,12 @@ def get_or_create_supplier(name: str) -> int:
 def insert_inventory(item: Dict[str, Any]) -> int:
     ensure_inventory_sequence()
     with get_inventory_db() as conn:
+        now = item.get("created_at") or datetime.datetime.utcnow().isoformat()
         cur = conn.execute(
             """
             INSERT INTO inventory (
                 artist_album, genre, style, label, format, condition, sleeve_condition, price_gel,
-                quantity, supplier_id, created_at, year, description, cover_url,
+                quantity, supplier_id, created_at, updated_at, local_rev, last_change_source, year, description, cover_url,
                 discogs_release_id, discogs_master_id, discogs_uri
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -134,7 +135,10 @@ def insert_inventory(item: Dict[str, Any]) -> int:
                 item.get("price_gel"),
                 item.get("quantity"),
                 item.get("supplier_id"),
-                item.get("created_at") or datetime.datetime.utcnow().isoformat(),
+                now,
+                item.get("updated_at") or now,
+                item.get("local_rev") or 0,
+                item.get("last_change_source"),
                 item.get("year"),
                 item.get("description"),
                 item.get("cover_url"),
@@ -150,13 +154,14 @@ def insert_inventory(item: Dict[str, Any]) -> int:
 def insert_inventory_with_id(item_id: int, item: Dict[str, Any]) -> int:
     ensure_inventory_sequence()
     with get_inventory_db() as conn:
+        now = item.get("created_at") or datetime.datetime.utcnow().isoformat()
         conn.execute(
             """
             INSERT INTO inventory (
                 id, artist_album, genre, style, label, format, condition, sleeve_condition, price_gel,
-                quantity, supplier_id, created_at, year, description, cover_url,
+                quantity, supplier_id, created_at, updated_at, local_rev, last_change_source, year, description, cover_url,
                 discogs_release_id, discogs_master_id, discogs_uri
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item_id,
@@ -170,7 +175,10 @@ def insert_inventory_with_id(item_id: int, item: Dict[str, Any]) -> int:
                 item.get("price_gel"),
                 item.get("quantity"),
                 item.get("supplier_id"),
-                item.get("created_at") or datetime.datetime.utcnow().isoformat(),
+                now,
+                item.get("updated_at") or now,
+                item.get("local_rev") or 0,
+                item.get("last_change_source"),
                 item.get("year"),
                 item.get("description"),
                 item.get("cover_url"),
@@ -327,36 +335,152 @@ def reduce_inventory_quantity(item_id: int, amount: int) -> bool:
         current = int(row["quantity"] or 0)
         if current < amount:
             return False
-        conn.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (current - amount, item_id))
+    update_inventory_fields(
+        item_id,
+        {"quantity": current - amount},
+        sync_channels=True,
+        source="manual_bot",
+    )
+    return True
+
+
+def log_inventory_event(
+    *,
+    store_id: Optional[int],
+    internal_product_id: int,
+    theere_id: Optional[str],
+    field: str,
+    old_value: Any,
+    new_value: Any,
+    source: str,
+    correlation_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
+    ts = datetime.datetime.utcnow().isoformat()
+    with get_inventory_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO inventory_events (
+                ts,
+                store_id,
+                internal_product_id,
+                theere_id,
+                field,
+                old_value,
+                new_value,
+                source,
+                correlation_id,
+                note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                store_id,
+                internal_product_id,
+                theere_id,
+                field,
+                str(old_value) if old_value is not None else None,
+                str(new_value) if new_value is not None else None,
+                source,
+                correlation_id,
+                note,
+            ),
+        )
         conn.commit()
-        return True
 
 
-def update_inventory_fields(item_id: int, fields: Dict[str, Any], *, sync_channels: bool = True) -> None:
+def update_inventory_fields(
+    item_id: int,
+    fields: Dict[str, Any],
+    *,
+    sync_channels: bool = True,
+    source: str = "manual_bot",
+    store_id: Optional[int] = None,
+    correlation_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
     if not fields:
         return
+    track_fields = {"quantity", "price_gel"}
+    tracked = track_fields & set(fields.keys())
+    old_qty = None
+    old_price = None
+    local_rev = None
+    with get_inventory_db() as conn:
+        if tracked:
+            cur = conn.execute(
+                "SELECT quantity, price_gel, local_rev FROM inventory WHERE id = ?",
+                (item_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return
+            old_qty = int(row["quantity"] or 0)
+            old_price = float(row["price_gel"] or 0)
+            local_rev = int(row["local_rev"] or 0)
+    now = datetime.datetime.utcnow().isoformat()
     keys = sorted(fields.keys())
     assignments = ", ".join(f"{key} = ?" for key in keys)
     values = [fields[key] for key in keys]
+    extra_assignments: List[str] = []
+    extra_values: List[Any] = []
+    if tracked:
+        extra_assignments.extend(["updated_at = ?", "local_rev = ?", "last_change_source = ?"])
+        extra_values.extend([now, (local_rev or 0) + 1, source])
+    assignment_block = ", ".join([assignments, *extra_assignments]) if extra_assignments else assignments
     with get_inventory_db() as conn:
         conn.execute(
-            f"UPDATE inventory SET {assignments} WHERE id = ?",
-            (*values, item_id),
+            f"UPDATE inventory SET {assignment_block} WHERE id = ?",
+            (*values, *extra_values, item_id),
         )
         conn.commit()
-    if sync_channels and {"quantity", "price_gel"} & set(keys):
-        try:
-            from services.channel_sync_service import sync_inventory_item
-            from services.store_service import get_default_store, get_store_settings
+    if tracked:
+        from services.store_service import get_default_store
 
+        if store_id is None:
+            store = get_default_store()
+            store_id = int(store["id"]) if store else None
+        if "quantity" in fields:
+            new_qty = int(fields["quantity"] or 0)
+            if old_qty is None or new_qty != old_qty:
+                log_inventory_event(
+                    store_id=store_id,
+                    internal_product_id=item_id,
+                    theere_id=str(item_id),
+                    field="quantity",
+                    old_value=old_qty,
+                    new_value=new_qty,
+                    source=source,
+                    correlation_id=correlation_id,
+                    note=note,
+                )
+        if "price_gel" in fields:
+            new_price = float(fields["price_gel"] or 0)
+            if old_price is None or new_price != old_price:
+                log_inventory_event(
+                    store_id=store_id,
+                    internal_product_id=item_id,
+                    theere_id=str(item_id),
+                    field="regular_price",
+                    old_value=old_price,
+                    new_value=new_price,
+                    source=source,
+                    correlation_id=correlation_id,
+                    note=note,
+                )
+    if sync_channels and tracked:
+        from services import sync_engine
+        from services.store_service import get_default_store, get_store_settings
+
+        try:
             store = get_default_store()
             if not store:
                 return
             settings = get_store_settings(int(store["id"]))
-            sync_price = bool(settings.get("discogs_price_sync"))
-            sync_inventory_item(int(store["id"]), item_id, sync_price=sync_price)
+            if settings.get("woo_instant_sync_enabled"):
+                sync_engine.SyncEngine().run_instant_sync_for_item(int(store["id"]), item_id)
         except Exception:
-            logger.exception("Inventory sync failed for item %s", item_id)
+            logger.exception("Instant sync failed for item %s", item_id)
 
 
 def update_inventory_supplier(item_id: int, supplier_name: Optional[str]) -> None:

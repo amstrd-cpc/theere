@@ -10,13 +10,17 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 from config.settings import load_settings
 from db import init_db
 from jobs.discogs_jobs import reconcile_discogs_inventory
-from jobs.woo_jobs import poll_recent_woo_orders, sync_inventory_to_woo
+from jobs.woo_jobs import sync_inventory_to_woo
+from services.backup_service import run_backup
+from services.sync_engine import SyncEngine
 from services.runtime import run_blocking
+from services.store_service import get_default_store
 from telegram_ui.add import orphan_supplier_callback, start_add_flow
 from telegram_ui.auth import check_auth_middleware, create_auth_handlers
 from telegram_ui.core import error_handler, help_command, recent_sales, start
 from telegram_ui.discogs import create_discogs_handlers
 from telegram_ui.inventory import create_inventory_conversation, low_stock, register_inventory_callbacks
+from telegram_ui.integrations import create_integrations_handlers
 from telegram_ui.menu import create_menu_handler
 from telegram_ui.orders import create_orders_callback_handler, create_orders_handler
 from telegram_ui.product_mapping import create_auto_map_handler, create_map_handler
@@ -43,12 +47,23 @@ async def sync_inventory_job(context: ContextTypes.DEFAULT_TYPE):
     await sync_inventory_to_woo()
 
 
-async def poll_recent_woo_orders_job(context: ContextTypes.DEFAULT_TYPE):
-    await poll_recent_woo_orders(context.bot, hours=6)
+async def periodic_sync_job(context: ContextTypes.DEFAULT_TYPE):
+    store = await run_blocking(get_default_store)
+    if not store:
+        return
+    await run_blocking(SyncEngine().run_periodic_sync, int(store["id"]))
 
 
 async def discogs_reconcile_job(context: ContextTypes.DEFAULT_TYPE):
     await run_blocking(reconcile_discogs_inventory)
+
+
+async def rolling_backup_job(context: ContextTypes.DEFAULT_TYPE):
+    await run_blocking(run_backup, "rolling")
+
+
+async def daily_backup_job(context: ContextTypes.DEFAULT_TYPE):
+    await run_blocking(run_backup, "daily")
 
 
 def main() -> None:
@@ -58,22 +73,28 @@ def main() -> None:
 
     if application.job_queue:
         application.job_queue.run_repeating(
-            poll_recent_woo_orders_job,
+            periodic_sync_job,
             interval=datetime.timedelta(minutes=5),
             first=datetime.timedelta(minutes=2),
-            name="woo-order-poll",
-        )
-        application.job_queue.run_repeating(
-            sync_inventory_job,
-            interval=datetime.timedelta(minutes=15),
-            first=datetime.timedelta(minutes=3),
-            name="woo-inventory-sync",
+            name="woo-periodic-sync",
         )
         application.job_queue.run_repeating(
             discogs_reconcile_job,
-            interval=datetime.timedelta(minutes=30),
-            first=datetime.timedelta(minutes=5),
-            name="discogs-reconcile",
+            interval=datetime.timedelta(minutes=5),
+            first=datetime.timedelta(minutes=3),
+            name="discogs-collection-sync",
+        )
+        application.job_queue.run_repeating(
+            rolling_backup_job,
+            interval=datetime.timedelta(minutes=15),
+            first=datetime.timedelta(minutes=1),
+            name="db-backup-rolling",
+        )
+        application.job_queue.run_repeating(
+            daily_backup_job,
+            interval=datetime.timedelta(days=1),
+            first=datetime.timedelta(minutes=10),
+            name="db-backup-daily",
         )
     else:
         logger.warning("JobQueue unavailable; install python-telegram-bot[job-queue] to enable Woo polling.")
@@ -98,6 +119,8 @@ def main() -> None:
     application.add_handler(create_map_handler())
     application.add_handler(create_auto_map_handler())
     for handler in create_discogs_handlers():
+        application.add_handler(handler)
+    for handler in create_integrations_handlers():
         application.add_handler(handler)
 
     application.add_handler(start_add_flow())
