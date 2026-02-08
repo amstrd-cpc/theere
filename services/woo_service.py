@@ -94,6 +94,12 @@ def fetch_products_page(page: int, per_page: int = 100, store: dict | None = Non
     return response.json()
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
+def fetch_product_by_id(product_id: int, store: dict | None = None, store_id: int | None = None) -> Dict[str, Any]:
+    response = _request("GET", f"/products/{product_id}", store=store, store_id=store_id)
+    return response.json()
+
+
 def fetch_max_sku(store: dict | None = None, store_id: int | None = None) -> int:
     if not is_configured(store_id):
         raise WooNotConfigured("WooCommerce not configured")

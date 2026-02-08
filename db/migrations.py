@@ -12,6 +12,7 @@ INVENTORY_COLUMNS = {
     "label": "TEXT",
     "format": "TEXT",
     "condition": "TEXT",
+    "sleeve_condition": "TEXT",
     "price_gel": "REAL",
     "quantity": "INTEGER",
     "supplier_id": "INTEGER",
@@ -43,7 +44,7 @@ SALES_COLUMNS = {
 }
 
 
-LATEST_VERSION = 3
+LATEST_VERSION = 4
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -98,6 +99,7 @@ def _create_inventory(conn: sqlite3.Connection) -> None:
             label TEXT,
             format TEXT,
             condition TEXT,
+            sleeve_condition TEXT,
             price_gel REAL NOT NULL DEFAULT 0,
             quantity INTEGER NOT NULL DEFAULT 0,
             supplier_id INTEGER,
@@ -254,6 +256,17 @@ def _create_woo_tables(conn: sqlite3.Connection) -> None:
             sku TEXT,
             discogs_listing_id INTEGER,
             discogs_release_id INTEGER,
+            discogs_last_seen_quantity INTEGER,
+            discogs_last_seen_price REAL,
+            discogs_last_seen_at TEXT,
+            discogs_last_seen_hash TEXT,
+            woo_last_seen_quantity INTEGER,
+            woo_last_seen_price REAL,
+            woo_last_seen_at TEXT,
+            woo_last_seen_hash TEXT,
+            last_sync_direction TEXT,
+            last_sync_hash TEXT,
+            last_sync_at TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
@@ -399,6 +412,27 @@ def migrate() -> None:
             _add_missing_columns(conn, "inventory", INVENTORY_COLUMNS)
             _set_version(conn, 3)
             current_version = 3
+        if current_version < 4:
+            _add_missing_columns(conn, "inventory", INVENTORY_COLUMNS)
+            _add_missing_columns(
+                conn,
+                "product_map",
+                {
+                    "discogs_last_seen_quantity": "INTEGER",
+                    "discogs_last_seen_price": "REAL",
+                    "discogs_last_seen_at": "TEXT",
+                    "discogs_last_seen_hash": "TEXT",
+                    "woo_last_seen_quantity": "INTEGER",
+                    "woo_last_seen_price": "REAL",
+                    "woo_last_seen_at": "TEXT",
+                    "woo_last_seen_hash": "TEXT",
+                    "last_sync_direction": "TEXT",
+                    "last_sync_hash": "TEXT",
+                    "last_sync_at": "TEXT",
+                },
+            )
+            _set_version(conn, 4)
+            current_version = 4
         conn.commit()
 
     with get_sales_db() as conn:

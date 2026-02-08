@@ -7,7 +7,9 @@ from telegram import Bot
 
 from services.inventory_service import get_unsynced_inventory, update_inventory_sync
 from services.runtime import run_blocking
-from services.store_service import get_default_store
+from services.product_map_service import get_latest_seen_at
+from services.store_service import get_default_store, get_store_settings
+from services.tri_sync_service import poll_woo_products
 from services.woo_service import WooNotConfigured, fetch_orders, is_configured, upsert_product_from_inventory, compute_sync_hash
 from jobs.worker_tasks import sync_order_state
 
@@ -62,3 +64,22 @@ async def poll_recent_woo_orders(bot: Bot, hours: int = 6) -> None:
         if len(orders) < 50:
             break
         page += 1
+
+
+def poll_three_way_woo() -> None:
+    store = get_default_store()
+    if not store:
+        return
+    settings = get_store_settings(int(store["id"]))
+    if not settings.get("three_way_sync_enabled"):
+        return
+    interval_minutes = int(settings.get("three_way_woo_interval_minutes") or 15)
+    last_seen = get_latest_seen_at(int(store["id"]), channel="woo")
+    if last_seen:
+        try:
+            last_dt = datetime.datetime.fromisoformat(last_seen)
+            if datetime.datetime.utcnow() - last_dt < datetime.timedelta(minutes=interval_minutes):
+                return
+        except ValueError:
+            pass
+    poll_woo_products(int(store["id"]))

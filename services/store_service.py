@@ -14,6 +14,9 @@ DEFAULT_SETTINGS = {
     "discogs_price_sync": False,
     "discogs_polling_enabled": False,
     "discogs_polling_interval_minutes": 30,
+    "three_way_sync_enabled": False,
+    "three_way_discogs_interval_minutes": 15,
+    "three_way_woo_interval_minutes": 15,
     "notification_chat_id": None,
     "verify_ssl": True,
 }
