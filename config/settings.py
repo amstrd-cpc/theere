@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -56,8 +57,16 @@ def load_settings() -> Settings:
     bot_password = os.getenv("BOT_PASSWORD", "your_default_password_here")
     session_timeout_hours = int(os.getenv("SESSION_TIMEOUT_HOURS", "24"))
     wc_verify_ssl = os.getenv("WC_VERIFY_SSL", "true").lower() not in {"0", "false", "no"}
-    db_path = os.getenv("RECORDSTORE_DB_FILE") or os.getenv("DB_PATH") or "clime_db.db"
+    db_path = os.getenv("RECORDSTORE_DB_FILE") or os.getenv("DB_PATH")
+    if not db_path:
+        data_dir = Path("/data")
+        if data_dir.exists():
+            db_path = str(data_dir / "clime_db.db")
+        else:
+            db_path = "clime_db.db"
     sales_db_path = os.getenv("SALES_DB_PATH")
+    if not sales_db_path and Path(db_path).parent == Path("/data"):
+        sales_db_path = str(Path("/data") / "sales.db")
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     api_base_url = os.getenv("API_BASE_URL")
     webhook_port = int(os.getenv("WEBHOOK_PORT", "8080"))

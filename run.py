@@ -6,10 +6,12 @@ import uvicorn
 from rq import Worker
 
 from config.settings import load_settings
+from db import init_db
 from jobs.queue import get_queue
 
 
 def main() -> None:
+    init_db()
     if len(sys.argv) < 2:
         print("Usage: python run.py [bot|api|worker]")
         raise SystemExit(1)

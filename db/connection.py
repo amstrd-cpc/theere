@@ -12,9 +12,12 @@ from config.settings import load_settings
 def _resolve_db_path(path: str) -> str:
     base = Path(path)
     if base.is_absolute():
+        base.parent.mkdir(parents=True, exist_ok=True)
         return str(base)
     repo_root = Path(os.getcwd())
-    return str(repo_root / base)
+    resolved = repo_root / base
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return str(resolved)
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
