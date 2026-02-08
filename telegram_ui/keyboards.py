@@ -48,12 +48,12 @@ DISCOGS_MENU_PUBLISH = "Publish Listing"
 DISCOGS_MENU_PUBLISH_ALL = "Publish All Listings"
 DISCOGS_MENU_PUBLISH_SELECTION = "Publish Selection"
 DISCOGS_MENU_COLLECTION = "Add to Collection"
-DISCOGS_MENU_COLLECTION_ALL = "Add All to Collection"
 DISCOGS_MENU_COLLECTION_SELECTION = "Add Selection to Collection"
 DISCOGS_MENU_LINK = "Link Listing"
 DISCOGS_MENU_UNLINK = "Unlink Listing"
 DISCOGS_MENU_RECONCILE = "Reconcile Discogs Stock"
 DISCOGS_MENU_REFRESH = "Refresh Quantities"
+DISCOGS_MENU_SYNC_ALL = "Sync All to Discogs"
 
 SETTINGS_MENU_ACCOUNT_ACTIONS = "Account"
 SETTINGS_MENU_SUPPORT_ACTIONS = "Support & Help"
@@ -62,7 +62,7 @@ SETTINGS_MENU_LOGOUT = "Logout"
 SETTINGS_MENU_HELP = "Help"
 SETTINGS_MENU_USERS = "Users"
 SETTINGS_MENU_START = "Start"
-SETTINGS_MENU_CANCEL = "Cancel Operation"
+SETTINGS_MENU_CANCEL = "/cancel"
 
 
 def build_main_menu(authenticated: bool) -> ReplyKeyboardMarkup:
@@ -187,7 +187,7 @@ def build_discogs_publish_menu() -> ReplyKeyboardMarkup:
         [KeyboardButton(DISCOGS_MENU_PUBLISH)],
         [KeyboardButton(DISCOGS_MENU_PUBLISH_ALL), KeyboardButton(DISCOGS_MENU_PUBLISH_SELECTION)],
         [KeyboardButton(DISCOGS_MENU_COLLECTION)],
-        [KeyboardButton(DISCOGS_MENU_COLLECTION_ALL), KeyboardButton(DISCOGS_MENU_COLLECTION_SELECTION)],
+        [KeyboardButton(DISCOGS_MENU_COLLECTION_SELECTION)],
         [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_DISCOGS)],
     ]
@@ -196,6 +196,7 @@ def build_discogs_publish_menu() -> ReplyKeyboardMarkup:
 
 def build_discogs_sync_menu() -> ReplyKeyboardMarkup:
     buttons = [
+        [KeyboardButton(DISCOGS_MENU_SYNC_ALL)],
         [KeyboardButton(DISCOGS_MENU_LINK), KeyboardButton(DISCOGS_MENU_UNLINK)],
         [KeyboardButton(DISCOGS_MENU_REFRESH)],
         [KeyboardButton(DISCOGS_MENU_RECONCILE), KeyboardButton(WOO_MENU_RECONCILE)],

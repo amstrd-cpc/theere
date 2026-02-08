@@ -6,6 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from services.channel_sync_service import reconcile_channel_stock, sync_inventory_item
+from services.discogs_sync_service import sync_all_discogs
 from services.discogs_service import DiscogsNotConfigured, add_to_collection, create_listing, fetch_listing, get_identity
 from services.inventory_service import get_inventory_by_id, search_inventory, update_inventory_fields
 from services.product_map_service import clear_discogs_listing, find_mapping_by_internal_id, upsert_product_map
@@ -14,7 +15,7 @@ from services.store_service import get_default_store, update_store_discogs
 from telegram_ui.auth import require_admin, require_auth
 
 ASK_TOKEN = 0
-SEARCHING, SELECTING, CONFIRMING, EXTRA_INPUT, BULK_SELECTING, FIELD_INPUT, BULK_INPUT = range(1, 8)
+SEARCHING, SELECTING, CONFIRMING, EXTRA_INPUT, BULK_SELECTING, FIELD_INPUT, BULK_INPUT, SYNCING = range(1, 9)
 
 DISCogs_ACTIONS = {
     "publish_discogs": "Publish to Discogs",
@@ -22,7 +23,6 @@ DISCogs_ACTIONS = {
     "publish_discogs_selection": "Publish selection to Discogs",
     "publish_discogs_bulk": "Publish selected to Discogs",
     "collect_discogs": "Add to Discogs collection",
-    "collect_discogs_all": "Add all to Discogs collection",
     "collect_discogs_selection": "Add selection to Discogs collection",
     "collect_discogs_bulk": "Add selected to Discogs collection",
     "link_discogs": "Link Discogs listing",
@@ -30,6 +30,7 @@ DISCogs_ACTIONS = {
     "reconcile_discogs": "Reconcile Discogs",
     "reconcile_woo": "Reconcile Woo",
     "discogs_refresh": "Refresh Discogs quantity",
+    "sync_discogs_all": "Sync all to Discogs",
 }
 
 
@@ -97,6 +98,18 @@ def _build_bulk_skip_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⏭️ Skip item", callback_data="discogs_bulk_skip"),
                 InlineKeyboardButton("❌ Cancel bulk", callback_data="discogs_bulk_cancel"),
             ]
+        ]
+    )
+
+
+def _build_sync_all_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🎶 Sync collection only", callback_data="discogs_sync_all:collection"),
+                InlineKeyboardButton("📦 Sync + publish listings", callback_data="discogs_sync_all:publish"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="discogs_sync_all:cancel")],
         ]
     )
 
@@ -272,18 +285,6 @@ async def collect_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @require_auth
 @require_admin
-async def collect_discogs_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    store = get_default_store()
-    if not store:
-        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
-        return
-    await update.message.reply_text("Tell me the artist or album name to add ALL matches to your Discogs collection:")
-    context.user_data["discogs_action"] = "collect_discogs_all"
-    return SEARCHING
-
-
-@require_auth
-@require_admin
 async def collect_discogs_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     store = get_default_store()
     if not store:
@@ -362,6 +363,20 @@ async def discogs_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @require_auth
 @require_admin
+async def sync_discogs_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store = get_default_store()
+    if not store:
+        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        return
+    await update.message.reply_text(
+        "How should I sync all inventory to Discogs? WooCommerce stock is treated as the source of truth.",
+        reply_markup=_build_sync_all_keyboard(),
+    )
+    return SYNCING
+
+
+@require_auth
+@require_admin
 async def handle_discogs_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = (update.message.text or "").strip()
     action = context.user_data.get("discogs_action")
@@ -372,7 +387,7 @@ async def handle_discogs_search(update: Update, context: ContextTypes.DEFAULT_TY
     items = await run_blocking(
         search_inventory,
         query,
-        50 if action in {"publish_discogs_all", "publish_discogs_selection", "collect_discogs_all", "collect_discogs_selection"} else 15,
+        50 if action in {"publish_discogs_all", "publish_discogs_selection", "collect_discogs_selection"} else 15,
     )
     if not items:
         await update.message.reply_text(f"❌ No matches found for '{query}'. Try another name.")
@@ -389,7 +404,7 @@ async def handle_discogs_search(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return BULK_SELECTING
 
-    if action in {"publish_discogs_all", "collect_discogs_all"}:
+    if action in {"publish_discogs_all"}:
         context.user_data["discogs_bulk_queue"] = [int(item["id"]) for item in items]
         verb = "Publish" if action == "publish_discogs_all" else "Add"
         suffix = "to Discogs" if action == "publish_discogs_all" else "to your collection"
@@ -655,7 +670,7 @@ async def handle_discogs_confirm(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("❌ Discogs collection add failed.")
         return ConversationHandler.END
 
-    if action in {"publish_discogs_all", "publish_discogs_bulk", "collect_discogs_all", "collect_discogs_bulk"}:
+    if action in {"publish_discogs_all", "publish_discogs_bulk", "collect_discogs_bulk"}:
         return await _advance_bulk_discogs(update, context, action=action)
 
     if action == "link_discogs":
@@ -822,6 +837,40 @@ async def handle_discogs_bulk_skip(update: Update, context: ContextTypes.DEFAULT
     return await _advance_bulk_discogs(update, context, action=action)
 
 
+@require_auth
+@require_admin
+async def handle_discogs_sync_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    _, mode = data.split(":", 1)
+    if mode == "cancel":
+        await query.edit_message_text("❌ Discogs sync cancelled.")
+        return ConversationHandler.END
+
+    store = get_default_store()
+    if not store:
+        await query.edit_message_text("❌ No store configured. Run /setup_woo first.")
+        return ConversationHandler.END
+
+    publish_missing = mode == "publish"
+    await query.edit_message_text("🔄 Syncing all inventory with Discogs. This may take a while...")
+    results = await run_blocking(sync_all_discogs, int(store["id"]), publish_missing=publish_missing)
+
+    summary = (
+        "✅ Discogs sync complete.\n"
+        f"• Items checked: {results.get('total_items', 0)}\n"
+        f"• Woo synced: {results.get('woo_synced', 0)} (failed: {results.get('woo_failed', 0)})\n"
+        f"• Collection adds: {results.get('collection_added', 0)} (failed: {results.get('collection_failed', 0)})\n"
+        f"• Listings updated: {results.get('listing_updated', 0)}\n"
+        f"• Listings published: {results.get('listing_published', 0)} (failed: {results.get('listing_failed', 0)})\n"
+        f"• Skipped (missing listing fields): {results.get('skipped_missing', 0)}\n"
+        f"• Skipped (missing release ID): {results.get('skipped_no_release', 0)}"
+    )
+    await query.edit_message_text(summary)
+    return ConversationHandler.END
+
+
 async def cancel_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text("❌ Discogs action cancelled.")
@@ -842,13 +891,13 @@ def create_discogs_handlers() -> list:
             CommandHandler("publish_discogs_all", publish_discogs_all),
             CommandHandler("publish_discogs_selection", publish_discogs_selection),
             CommandHandler("collect_discogs", collect_discogs),
-            CommandHandler("collect_discogs_all", collect_discogs_all),
             CommandHandler("collect_discogs_selection", collect_discogs_selection),
             CommandHandler("link_discogs", link_discogs),
             CommandHandler("unlink_discogs", unlink_discogs),
             CommandHandler("reconcile_discogs", reconcile_discogs),
             CommandHandler("reconcile_woo", reconcile_woo),
             CommandHandler("discogs_refresh", discogs_refresh),
+            CommandHandler("sync_discogs_all", sync_discogs_all),
         ],
         states={
             SEARCHING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_discogs_search)],
@@ -861,6 +910,7 @@ def create_discogs_handlers() -> list:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_discogs_bulk_input),
                 CallbackQueryHandler(handle_discogs_bulk_skip, pattern=r"^discogs_bulk_"),
             ],
+            SYNCING: [CallbackQueryHandler(handle_discogs_sync_all, pattern=r"^discogs_sync_all:")],
         },
         fallbacks=[CommandHandler("cancel", cancel_discogs)],
         name="discogs_actions",
