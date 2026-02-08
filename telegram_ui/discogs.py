@@ -855,7 +855,12 @@ async def handle_discogs_sync_all(update: Update, context: ContextTypes.DEFAULT_
 
     publish_missing = mode == "publish"
     await query.edit_message_text("🔄 Syncing all inventory with Discogs. This may take a while...")
-    results = await run_blocking(sync_all_discogs, int(store["id"]), publish_missing=publish_missing)
+    results = await run_blocking(
+        sync_all_discogs,
+        int(store["id"]),
+        publish_missing=publish_missing,
+        timeout=300.0,
+    )
 
     summary = (
         "✅ Discogs sync complete.\n"
