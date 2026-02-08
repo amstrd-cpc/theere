@@ -3,7 +3,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from services.discogs_service import add_to_collection, create_listing, update_listing, update_listing_quantity
+from services.discogs_service import (
+    add_to_collection,
+    create_listing,
+    fetch_collection_release_instances,
+    update_listing,
+    update_listing_quantity,
+)
 from services.inventory_service import get_all_inventory, update_inventory_fields
 from services.product_map_service import find_mapping_by_internal_id, upsert_product_map
 from services.store_service import get_store, get_store_settings, update_discogs_sync_time
@@ -49,6 +55,7 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
         "woo_failed": 0,
         "collection_added": 0,
         "collection_failed": 0,
+        "collection_skipped": 0,
         "listing_updated": 0,
         "listing_published": 0,
         "listing_failed": 0,
@@ -77,12 +84,28 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
 
         release_id = item.get("discogs_release_id")
         if release_id:
+            target_qty = max(0, int(item.get("quantity") or 0))
             try:
-                add_to_collection(store, int(release_id))
-                results["collection_added"] += 1
+                instances = fetch_collection_release_instances(store, int(release_id))
+                current_qty = len(instances)
             except Exception:
-                logger.exception("Failed adding release %s to Discogs collection", release_id)
+                logger.exception("Failed checking Discogs collection for release %s", release_id)
                 results["collection_failed"] += 1
+                current_qty = None
+
+            if current_qty is None:
+                pass
+            elif current_qty >= target_qty:
+                results["collection_skipped"] += 1
+            else:
+                to_add = target_qty - current_qty
+                for _ in range(to_add):
+                    try:
+                        add_to_collection(store, int(release_id))
+                        results["collection_added"] += 1
+                    except Exception:
+                        logger.exception("Failed adding release %s to Discogs collection", release_id)
+                        results["collection_failed"] += 1
         else:
             results["skipped_no_release"] += 1
 
