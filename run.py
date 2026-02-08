@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 
 import uvicorn
-from rq import Connection, Worker
+from rq import Worker
 
 from config.settings import load_settings
 from jobs.queue import get_queue
@@ -28,9 +28,8 @@ def main() -> None:
 
     if mode == "worker":
         queue = get_queue()
-        with Connection(queue.connection):
-            worker = Worker([queue])
-            worker.work()
+        worker = Worker([queue], connection=queue.connection)
+        worker.work()
         return
 
     print("Unknown mode. Use bot, api, or worker.")
