@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+import requests
+
 from services.discogs_client import DiscogsClient
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,29 @@ def add_to_collection(store: Dict[str, Any], release_id: int, *, folder_id: int 
         f"/users/{username}/collection/folders/{folder_id}/releases/{int(release_id)}",
         {},
     )
+
+
+def fetch_collection_release_instances(
+    store: Dict[str, Any],
+    release_id: int,
+    *,
+    folder_id: int = 1,
+) -> List[Dict[str, Any]]:
+    username = store.get("discogs_username")
+    if not username:
+        identity = get_identity(store)
+        username = identity.get("username")
+    if not username:
+        raise DiscogsNotConfigured("Discogs username not configured for this store.")
+    client = _client(store)
+    try:
+        payload = client.get(f"/users/{username}/collection/releases/{int(release_id)}")
+    except requests.HTTPError as exc:
+        response = exc.response
+        if response is not None and response.status_code == 404:
+            return []
+        raise
+    return payload.get("releases", [])
 
 
 def format_tracklist(tracklist: List[Dict[str, Any]]) -> str:
