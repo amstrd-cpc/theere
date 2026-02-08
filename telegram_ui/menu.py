@@ -100,11 +100,10 @@ BACK_TARGETS = {
 
 
 def _build_command_update(update: Update, command: str, bot) -> Update:
-    payload = update.to_dict()
-    message = payload.get("message") or {}
+    message = update.message.to_dict() if update.message else {}
     message["text"] = command
     message["entities"] = [{"type": "bot_command", "offset": 0, "length": len(command)}]
-    payload["message"] = message
+    payload = {"update_id": update.update_id, "message": message}
     return Update.de_json(payload, bot)
 
 

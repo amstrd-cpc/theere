@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
 from db.connection import get_inventory_db
@@ -59,12 +60,18 @@ def _woo_keyboard(settings: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
-def _discogs_keyboard(settings: dict) -> InlineKeyboardMarkup:
+def _discogs_keyboard(settings: dict, connected: bool) -> InlineKeyboardMarkup:
     buttons = [
         [
             InlineKeyboardButton(
                 f"Collection Sync: {_bool_label(settings.get('discogs_collection_sync_enabled'))}",
                 callback_data="integrations:discogs:toggle:discogs_collection_sync_enabled",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Update Discogs Token" if connected else "Connect Discogs",
+                callback_data="integrations:discogs:connect",
             )
         ],
         [
@@ -119,7 +126,11 @@ async def integrations_discogs(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
     settings = get_store_settings(int(store["id"]))
-    await update.message.reply_text(_format_discogs_status(store, settings), reply_markup=_discogs_keyboard(settings))
+    connected = bool(store.get("discogs_token"))
+    await update.message.reply_text(
+        _format_discogs_status(store, settings),
+        reply_markup=_discogs_keyboard(settings, connected),
+    )
 
 
 def _latest_sync_run(store_id: int, run_type: str) -> dict | None:
@@ -246,7 +257,11 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
         elif action == "run_sync":
             await run_blocking(SyncEngine().run_manual_sync, store_id)
             settings = get_store_settings(store_id)
-        await query.edit_message_text(_format_woo_status(store_id, settings), reply_markup=_woo_keyboard(settings))
+        try:
+            await query.edit_message_text(_format_woo_status(store_id, settings), reply_markup=_woo_keyboard(settings))
+        except BadRequest as exc:
+            if "Message is not modified" not in str(exc):
+                raise
         return
 
     if section == "discogs":
@@ -254,7 +269,15 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
             key = data[3]
             current = bool(settings.get(key))
             settings = update_store_settings(store_id, {key: not current})
-            await query.edit_message_text(_format_discogs_status(store, settings), reply_markup=_discogs_keyboard(settings))
+            connected = bool(store.get("discogs_token"))
+            try:
+                await query.edit_message_text(
+                    _format_discogs_status(store, settings),
+                    reply_markup=_discogs_keyboard(settings, connected),
+                )
+            except BadRequest as exc:
+                if "Message is not modified" not in str(exc):
+                    raise
         elif action == "coming_soon":
             await query.answer("Listings sync is coming soon.", show_alert=True)
         return

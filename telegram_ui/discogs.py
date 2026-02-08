@@ -198,9 +198,17 @@ def _parse_field_value(field: str, value: str) -> tuple[bool, dict]:
 async def connect_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     store = get_default_store()
     if not store:
-        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        if update.message:
+            await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        elif update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return ConversationHandler.END
-    await update.message.reply_text("Enter Discogs personal access token:")
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text("Enter Discogs personal access token:")
+    else:
+        await update.message.reply_text("Enter Discogs personal access token:")
     return ASK_TOKEN
 
 
@@ -905,7 +913,10 @@ async def cancel_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def create_discogs_handlers() -> list:
     setup_handler = ConversationHandler(
-        entry_points=[CommandHandler("connect_discogs", connect_discogs)],
+        entry_points=[
+            CommandHandler("connect_discogs", connect_discogs),
+            CallbackQueryHandler(connect_discogs, pattern=r"^integrations:discogs:connect$"),
+        ],
         states={ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_token)]},
         fallbacks=[CommandHandler("cancel", cancel_discogs)],
         name="connect_discogs",
