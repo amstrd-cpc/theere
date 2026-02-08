@@ -97,6 +97,35 @@ def fetch_collection_release_instances(
     return payload.get("releases", [])
 
 
+def fetch_collection_releases(
+    store: Dict[str, Any],
+    *,
+    folder_id: int = 1,
+    per_page: int = 50,
+) -> List[Dict[str, Any]]:
+    username = store.get("discogs_username")
+    if not username:
+        identity = get_identity(store)
+        username = identity.get("username")
+    if not username:
+        raise DiscogsNotConfigured("Discogs username not configured for this store.")
+    client = _client(store)
+    page = 1
+    releases: List[Dict[str, Any]] = []
+    while True:
+        payload = client.get(
+            f"/users/{username}/collection/folders/{folder_id}/releases",
+            params={"page": page, "per_page": per_page},
+        )
+        releases.extend(payload.get("releases", []))
+        pagination = payload.get("pagination") or {}
+        total_pages = int(pagination.get("pages") or page)
+        if page >= total_pages:
+            break
+        page += 1
+    return releases
+
+
 def format_tracklist(tracklist: List[Dict[str, Any]]) -> str:
     if not tracklist:
         return ""
