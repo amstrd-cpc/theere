@@ -8,6 +8,7 @@ from config.settings import load_settings
 from services.auth_service import AuthManager
 from services.runtime import run_blocking
 from telegram_ui import messages
+from telegram_ui.keyboards import build_main_menu
 
 settings = load_settings()
 auth_manager = AuthManager(settings.bot_password, settings.session_timeout_hours)
@@ -63,12 +64,14 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=update.effective_chat.id,
             text=messages.LOGIN_SUCCESS.format(first_name=user.first_name, hours=settings.session_timeout_hours),
             parse_mode="Markdown",
+            reply_markup=build_main_menu(True),
         )
     else:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=messages.LOGIN_FAILURE,
             parse_mode="Markdown",
+            reply_markup=build_main_menu(False),
         )
     return ConversationHandler.END
 
@@ -77,9 +80,13 @@ async def logout_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if await run_blocking(auth_manager.is_authenticated, user_id):
         await run_blocking(auth_manager.logout_user, user_id)
-        await update.message.reply_text(messages.LOGOUT_SUCCESS, parse_mode="Markdown")
+        await update.message.reply_text(
+            messages.LOGOUT_SUCCESS,
+            parse_mode="Markdown",
+            reply_markup=build_main_menu(False),
+        )
     else:
-        await update.message.reply_text(messages.LOGOUT_ALREADY)
+        await update.message.reply_text(messages.LOGOUT_ALREADY, reply_markup=build_main_menu(False))
 
 
 async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,9 +94,17 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await run_blocking(auth_manager.is_authenticated, user_id):
         expiry = auth_manager.authenticated_users[user_id]
         time_left = expiry - datetime.now()
-        await update.message.reply_text(messages.STATUS_ACTIVE.format(time_left=time_left), parse_mode="Markdown")
+        await update.message.reply_text(
+            messages.STATUS_ACTIVE.format(time_left=time_left),
+            parse_mode="Markdown",
+            reply_markup=build_main_menu(True),
+        )
     else:
-        await update.message.reply_text(messages.STATUS_INACTIVE, parse_mode="Markdown")
+        await update.message.reply_text(
+            messages.STATUS_INACTIVE,
+            parse_mode="Markdown",
+            reply_markup=build_main_menu(False),
+        )
 
 
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):

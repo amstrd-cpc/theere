@@ -5,6 +5,7 @@ START_MESSAGE = (
     "Hello {first_name}\\!\n\n"
     "🔒 *This bot is password protected\\.*\n"
     "You must authenticate before using any commands\\.\n\n"
+    "Tap a button below to get started\\.\n\n"
     "*Commands:*\n"
     "• /login \\- Enter password to authenticate\n"
     "• /help \\- Show this help message\n\n"
@@ -20,6 +21,7 @@ START_MESSAGE = (
 
 HELP_AUTHENTICATED = (
     "🎵 *Record Store Bot \\- Commands* 🎵\n\n"
+    "Tap any button below to run a command instantly\\.\n\n"
     "*Inventory Management:*\n"
     "• /add \\- Add new records from Discogs\n"
     "• /inventory \\- Interactive inventory search\n"
@@ -58,6 +60,7 @@ HELP_AUTHENTICATED = (
 
 HELP_UNAUTHENTICATED = (
     "🔒 *Authentication Required* 🔒\n\n"
+    "Tap a button below to get started\\.\n\n"
     "*Available Commands:*\n"
     "• /login \\- Enter password to authenticate\n"
     "• /help \\- Show this help\n"
