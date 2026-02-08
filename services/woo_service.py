@@ -9,6 +9,7 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from config.settings import load_settings
+from services.store_service import get_default_store, get_store
 from services.discogs_service import format_tracklist
 
 logger = logging.getLogger(__name__)
@@ -23,30 +24,32 @@ class WooError(RuntimeError):
     pass
 
 
-def _settings() -> dict:
+def _settings(store: dict | None = None, store_id: int | None = None) -> dict:
+    if store is None:
+        store = get_store(store_id) if store_id else get_default_store()
+    if not store:
+        raise WooNotConfigured("WooCommerce store not configured")
     settings = load_settings()
-    if not (settings.wc_api_url and settings.wc_consumer_key and settings.wc_consumer_secret):
-        raise WooNotConfigured("WooCommerce not configured")
     return {
-        "base_url": settings.wc_api_url.rstrip("/"),
-        "key": settings.wc_consumer_key,
-        "secret": settings.wc_consumer_secret,
+        "base_url": str(store["store_url"]).rstrip("/"),
+        "key": store["woo_consumer_key"],
+        "secret": store["woo_consumer_secret"],
         "verify": settings.wc_verify_ssl,
     }
 
 
-def is_configured() -> bool:
-    settings = load_settings()
-    return bool(settings.wc_api_url and settings.wc_consumer_key and settings.wc_consumer_secret)
+def is_configured(store_id: int | None = None) -> bool:
+    store = get_store(store_id) if store_id else get_default_store()
+    return store is not None
 
 
-def _build_auth() -> tuple[str, str]:
-    settings = _settings()
+def _build_auth(store: dict | None = None, store_id: int | None = None) -> tuple[str, str]:
+    settings = _settings(store, store_id)
     return settings["key"], settings["secret"]
 
 
-def _base_url() -> str:
-    settings = _settings()
+def _base_url(store: dict | None = None, store_id: int | None = None) -> str:
+    settings = _settings(store, store_id)
     base = settings["base_url"].rstrip("/")
     if "/wp-json/wc/" in base:
         prefix, _, suffix = base.partition("/wp-json/wc/")
@@ -55,8 +58,8 @@ def _base_url() -> str:
     return base.rstrip("/") + "/wp-json/wc/v3"
 
 
-def _wp_base_url() -> str:
-    settings = _settings()
+def _wp_base_url(store: dict | None = None, store_id: int | None = None) -> str:
+    settings = _settings(store, store_id)
     base = settings["base_url"].rstrip("/")
     if "/wp-json/wc/" in base:
         prefix, _, _ = base.partition("/wp-json/wc/")
@@ -64,11 +67,11 @@ def _wp_base_url() -> str:
     return base.rstrip("/") + "/wp-json/wp/v2"
 
 
-def _request(method: str, path: str, **kwargs: Any) -> requests.Response:
-    base_url = _base_url()
+def _request(method: str, path: str, *, store: dict | None = None, store_id: int | None = None, **kwargs: Any) -> requests.Response:
+    base_url = _base_url(store, store_id)
     url = f"{base_url}{path}"
-    settings = _settings()
-    kwargs.setdefault("auth", _build_auth())
+    settings = _settings(store, store_id)
+    kwargs.setdefault("auth", _build_auth(store, store_id))
     kwargs.setdefault("timeout", 20)
     kwargs.setdefault("verify", settings["verify"])
     response = requests.request(method, url, **kwargs)
@@ -77,8 +80,8 @@ def _request(method: str, path: str, **kwargs: Any) -> requests.Response:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def find_product_by_sku(sku: str) -> Optional[Dict[str, Any]]:
-    response = _request("GET", "/products", params={"sku": sku})
+def find_product_by_sku(sku: str, store: dict | None = None, store_id: int | None = None) -> Optional[Dict[str, Any]]:
+    response = _request("GET", "/products", params={"sku": sku}, store=store, store_id=store_id)
     items = response.json()
     if not items:
         return None
@@ -86,19 +89,19 @@ def find_product_by_sku(sku: str) -> Optional[Dict[str, Any]]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def fetch_products_page(page: int, per_page: int = 100) -> List[Dict[str, Any]]:
-    response = _request("GET", "/products", params={"page": page, "per_page": per_page})
+def fetch_products_page(page: int, per_page: int = 100, store: dict | None = None, store_id: int | None = None) -> List[Dict[str, Any]]:
+    response = _request("GET", "/products", params={"page": page, "per_page": per_page}, store=store, store_id=store_id)
     return response.json()
 
 
-def fetch_max_sku() -> int:
-    if not is_configured():
+def fetch_max_sku(store: dict | None = None, store_id: int | None = None) -> int:
+    if not is_configured(store_id):
         raise WooNotConfigured("WooCommerce not configured")
     page = 1
     per_page = 100
     max_sku = 0
     while True:
-        products = fetch_products_page(page=page, per_page=per_page)
+        products = fetch_products_page(page=page, per_page=per_page, store=store, store_id=store_id)
         if not products:
             break
         for product in products:
@@ -111,8 +114,8 @@ def fetch_max_sku() -> int:
     return max_sku
 
 
-def fetch_next_sku() -> int:
-    return fetch_max_sku() + 1
+def fetch_next_sku(store: dict | None = None, store_id: int | None = None) -> int:
+    return fetch_max_sku(store=store, store_id=store_id) + 1
 
 
 def _slugify(value: str) -> str:
@@ -137,19 +140,25 @@ def _cache_key(name: str, parent_id: Optional[int]) -> Tuple[str, int]:
     return name.strip().lower(), int(parent_id or 0)
 
 
-def _get_categories(*, search: Optional[str] = None, parent_id: Optional[int] = None) -> List[Dict[str, Any]]:
+def _get_categories(
+    *,
+    search: Optional[str] = None,
+    parent_id: Optional[int] = None,
+    store: dict | None = None,
+    store_id: int | None = None,
+) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {"per_page": 100}
     if search:
         params["search"] = search
     if parent_id is not None:
         params["parent"] = parent_id
-    response = _request("GET", "/products/categories", params=params)
+    response = _request("GET", "/products/categories", params=params, store=store, store_id=store_id)
     return response.json()
 
 
-def _find_category(name: str, parent_id: Optional[int]) -> Optional[Dict[str, Any]]:
+def _find_category(name: str, parent_id: Optional[int], store: dict | None = None, store_id: int | None = None) -> Optional[Dict[str, Any]]:
     try:
-        candidates = _get_categories(search=name, parent_id=parent_id)
+        candidates = _get_categories(search=name, parent_id=parent_id, store=store, store_id=store_id)
     except requests.RequestException:
         logger.exception("Failed to fetch Woo categories for %s", name)
         raise
@@ -162,12 +171,12 @@ def _find_category(name: str, parent_id: Optional[int]) -> Optional[Dict[str, An
     return None
 
 
-def _ensure_category(name: str, parent_id: Optional[int] = None) -> int:
+def _ensure_category(name: str, parent_id: Optional[int] = None, store: dict | None = None, store_id: int | None = None) -> int:
     key = _cache_key(name, parent_id)
     if key in _category_cache:
         return _category_cache[key]
 
-    existing = _find_category(name, parent_id)
+    existing = _find_category(name, parent_id, store=store, store_id=store_id)
     if existing and existing.get("id"):
         cat_id = int(existing["id"])
         _category_cache[key] = cat_id
@@ -177,7 +186,7 @@ def _ensure_category(name: str, parent_id: Optional[int] = None) -> int:
     if parent_id:
         payload["parent"] = int(parent_id)
     try:
-        response = _request("POST", "/products/categories", json=payload)
+        response = _request("POST", "/products/categories", json=payload, store=store, store_id=store_id)
         category = response.json()
     except requests.RequestException:
         logger.exception("Failed creating Woo category %s (parent=%s)", name, parent_id)
@@ -384,24 +393,46 @@ def create_product(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def update_product(product_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
-    response = _request("PUT", f"/products/{product_id}", json=payload)
+def update_product(
+    product_id: int,
+    payload: Dict[str, Any],
+    store: dict | None = None,
+    store_id: int | None = None,
+) -> Dict[str, Any]:
+    response = _request("PUT", f"/products/{product_id}", json=payload, store=store, store_id=store_id)
     return response.json()
 
 
-def update_product_by_id(product_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return update_product(product_id, payload)
+def update_product_by_id(
+    product_id: int,
+    payload: Dict[str, Any],
+    store: dict | None = None,
+    store_id: int | None = None,
+) -> Dict[str, Any]:
+    return update_product(product_id, payload, store=store, store_id=store_id)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def update_stock(product_id: int, quantity: int) -> None:
-    _request("PUT", f"/products/{product_id}", json={"stock_quantity": quantity, "manage_stock": True})
+def update_stock(product_id: int, quantity: int, store: dict | None = None, store_id: int | None = None) -> None:
+    _request(
+        "PUT",
+        f"/products/{product_id}",
+        json={"stock_quantity": quantity, "manage_stock": True},
+        store=store,
+        store_id=store_id,
+    )
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def upload_media(file_bytes: bytes, filename: str, content_type: str | None = None) -> Dict[str, Any]:
-    url = f"{_wp_base_url()}/media"
-    settings = _settings()
+def upload_media(
+    file_bytes: bytes,
+    filename: str,
+    content_type: str | None = None,
+    store: dict | None = None,
+    store_id: int | None = None,
+) -> Dict[str, Any]:
+    url = f"{_wp_base_url(store, store_id)}/media"
+    settings = _settings(store, store_id)
     resolved_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     headers = {
         "Content-Disposition": f'attachment; filename="{filename}"',
@@ -412,7 +443,7 @@ def upload_media(file_bytes: bytes, filename: str, content_type: str | None = No
         url,
         data=file_bytes,
         headers=headers,
-        auth=_build_auth(),
+        auth=_build_auth(store, store_id),
         timeout=30,
         verify=settings["verify"],
     )
@@ -421,8 +452,14 @@ def upload_media(file_bytes: bytes, filename: str, content_type: str | None = No
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def fetch_orders(params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    response = _request("GET", "/orders", params=params or {"status": "processing"})
+def fetch_orders(params: Optional[Dict[str, Any]] = None, store: dict | None = None, store_id: int | None = None) -> List[Dict[str, Any]]:
+    response = _request(
+        "GET",
+        "/orders",
+        params=params or {"status": "processing"},
+        store=store,
+        store_id=store_id,
+    )
     return response.json()
 
 
@@ -452,3 +489,60 @@ def create_product_from_inventory(item: Dict[str, Any]) -> Dict[str, Any]:
 def update_product_from_inventory(product_id: int, item: Dict[str, Any]) -> Dict[str, Any]:
     payload = payload_from_inventory(item)
     return update_product(product_id, payload)
+
+
+def validate_credentials(store: dict) -> bool:
+    try:
+        response = _request("GET", "/system_status", store=store)
+        return response.status_code == 200
+    except Exception:
+        logger.exception("Woo credential validation failed")
+        return False
+
+
+def fetch_order_by_id(store: dict, order_id: int) -> Dict[str, Any] | None:
+    try:
+        response = _request("GET", f"/orders/{order_id}", store=store)
+        return response.json()
+    except Exception:
+        logger.exception("Failed fetching Woo order %s", order_id)
+        return None
+
+
+def update_order_status(store: dict, order_id: int, status: str) -> Dict[str, Any] | None:
+    try:
+        response = _request("PUT", f"/orders/{order_id}", json={"status": status}, store=store)
+        return response.json()
+    except Exception:
+        logger.exception("Failed updating Woo order %s", order_id)
+        return None
+
+
+def create_webhook(store: dict, *, name: str, topic: str, delivery_url: str, secret: str) -> Dict[str, Any] | None:
+    payload = {
+        "name": name,
+        "topic": topic,
+        "delivery_url": delivery_url,
+        "secret": secret,
+        "status": "active",
+    }
+    try:
+        response = _request("POST", "/webhooks", json=payload, store=store)
+        return response.json()
+    except Exception:
+        logger.exception("Failed creating Woo webhook %s", topic)
+        return None
+
+
+def list_webhooks(store: dict) -> List[Dict[str, Any]]:
+    response = _request("GET", "/webhooks", params={"per_page": 100}, store=store)
+    return response.json()
+
+
+def fetch_webhook(store: dict, webhook_id: int) -> Dict[str, Any] | None:
+    try:
+        response = _request("GET", f"/webhooks/{webhook_id}", store=store)
+        return response.json()
+    except Exception:
+        logger.exception("Failed fetching Woo webhook %s", webhook_id)
+        return None

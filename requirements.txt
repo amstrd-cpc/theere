@@ -1,9 +1,6 @@
 # Core Telegram Bot Framework
 python-telegram-bot[job-queue]
 
-# Discord API Client for Discogs integration
-discogs-client
-
 # Environment Variables Management
 python-dotenv
 
@@ -23,7 +20,6 @@ python-dateutil
 jsonschema
 
 # Async Support
-asyncio-mqtt
 aiohttp
 
 # Logging and Debugging
@@ -47,9 +43,11 @@ tenacity
 # Memory and Performance
 psutil
 
-# Optional: Web Framework (if you plan to add web interface)
-flask
-flask-cors
+# Webhook API + Queue
+fastapi
+uvicorn
+redis
+rq
 
 # Optional: Additional Excel Support
 xlsxwriter

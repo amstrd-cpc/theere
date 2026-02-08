@@ -26,6 +26,17 @@ def require_auth(func):
     return wrapper
 
 
+def require_admin(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        if settings.admin_ids and user_id not in settings.admin_ids:
+            await update.message.reply_text(messages.ADMIN_ONLY)
+            return
+        return await func(update, context, *args, **kwargs)
+
+    return wrapper
+
+
 async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if await run_blocking(auth_manager.is_authenticated, user_id):

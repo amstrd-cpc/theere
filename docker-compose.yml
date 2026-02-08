@@ -1,0 +1,55 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    command: python run.py api
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_PASSWORD=${BOT_PASSWORD}
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - RECORDSTORE_DB_FILE=${RECORDSTORE_DB_FILE}
+      - SALES_DB_PATH=${SALES_DB_PATH}
+      - REDIS_URL=redis://redis:6379/0
+      - API_BASE_URL=${API_BASE_URL}
+      - WEBHOOK_PORT=8080
+      - DEFAULT_STORE_ID=${DEFAULT_STORE_ID}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    command: python run.py worker
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_PASSWORD=${BOT_PASSWORD}
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - RECORDSTORE_DB_FILE=${RECORDSTORE_DB_FILE}
+      - SALES_DB_PATH=${SALES_DB_PATH}
+      - REDIS_URL=redis://redis:6379/0
+      - DEFAULT_STORE_ID=${DEFAULT_STORE_ID}
+    depends_on:
+      - redis
+
+  bot:
+    build: .
+    command: python run.py bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_PASSWORD=${BOT_PASSWORD}
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - RECORDSTORE_DB_FILE=${RECORDSTORE_DB_FILE}
+      - SALES_DB_PATH=${SALES_DB_PATH}
+      - REDIS_URL=redis://redis:6379/0
+      - DEFAULT_STORE_ID=${DEFAULT_STORE_ID}
+    depends_on:
+      - redis

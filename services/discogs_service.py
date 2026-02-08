@@ -3,10 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-import requests
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
-from config.settings import load_settings
+from services.discogs_client import DiscogsClient
 
 logger = logging.getLogger(__name__)
 
@@ -15,49 +12,50 @@ class DiscogsNotConfigured(RuntimeError):
     pass
 
 
-class DiscogsError(RuntimeError):
-    pass
+def _client(store: Dict[str, Any]) -> DiscogsClient:
+    token = store.get("discogs_token")
+    if not token:
+        raise DiscogsNotConfigured("Discogs token not configured for this store.")
+    return DiscogsClient(token)
 
 
-def _session() -> requests.Session:
-    settings = load_settings()
-    if not settings.discogs_token:
-        raise DiscogsNotConfigured("DISCOGS_TOKEN not set")
-    session = requests.Session()
-    session.headers.update({"Authorization": f"Discogs token={settings.discogs_token}"})
-    return session
-
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def search_releases(query: str, page: int = 1, per_page: int = 50) -> List[Dict[str, Any]]:
-    session = _session()
-    response = session.get(
-        "https://api.discogs.com/database/search",
+def search_releases(store: Dict[str, Any], query: str, page: int = 1, per_page: int = 50) -> List[Dict[str, Any]]:
+    client = _client(store)
+    data = client.get(
+        "/database/search",
         params={"q": query, "type": "release", "page": page, "per_page": per_page},
-        timeout=15,
     )
-    response.raise_for_status()
-    data = response.json()
     return data.get("results", [])
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def fetch_release(release_id: int) -> Dict[str, Any]:
-    session = _session()
-    response = session.get(f"https://api.discogs.com/releases/{release_id}", timeout=15)
-    response.raise_for_status()
-    return response.json()
+def fetch_release(store: Dict[str, Any], release_id: int) -> Dict[str, Any]:
+    client = _client(store)
+    return client.get(f"/releases/{release_id}")
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), retry=retry_if_exception_type(requests.RequestException))
-def fetch_price_suggestions(release_id: int) -> Dict[str, Any]:
-    session = _session()
-    response = session.get(
-        f"https://api.discogs.com/marketplace/price_suggestions/{release_id}",
-        timeout=15,
-    )
-    response.raise_for_status()
-    return response.json()
+def fetch_price_suggestions(store: Dict[str, Any], release_id: int) -> Dict[str, Any]:
+    client = _client(store)
+    return client.get(f"/marketplace/price_suggestions/{release_id}")
+
+
+def get_identity(store: Dict[str, Any]) -> Dict[str, Any]:
+    client = _client(store)
+    return client.get_identity()
+
+
+def create_listing(store: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    client = _client(store)
+    return client.post("/marketplace/listings", payload)
+
+
+def update_listing(store: Dict[str, Any], listing_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    client = _client(store)
+    return client.update(f"/marketplace/listings/{listing_id}", payload)
+
+
+def fetch_listing(store: Dict[str, Any], listing_id: int) -> Dict[str, Any]:
+    client = _client(store)
+    return client.get(f"/marketplace/listings/{listing_id}")
 
 
 def format_tracklist(tracklist: List[Dict[str, Any]]) -> str:
@@ -118,3 +116,7 @@ def extract_artists(release: Dict[str, Any]) -> str:
     artists = release.get("artists") or []
     names = [artist.get("name") for artist in artists if artist.get("name")]
     return ", ".join(names) if names else "Unknown"
+
+
+def update_listing_quantity(store: Dict[str, Any], listing_id: int, quantity: int) -> Dict[str, Any]:
+    return update_listing(store, listing_id, {"quantity": max(0, int(quantity))})

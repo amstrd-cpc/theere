@@ -23,6 +23,9 @@ INVENTORY_COLUMNS = {
     "year": "INTEGER",
     "description": "TEXT",
     "cover_url": "TEXT",
+    "discogs_release_id": "INTEGER",
+    "discogs_master_id": "INTEGER",
+    "discogs_uri": "TEXT",
 }
 
 SALES_COLUMNS = {
@@ -40,6 +43,9 @@ SALES_COLUMNS = {
 }
 
 
+LATEST_VERSION = 3
+
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     cur = conn.execute(f"PRAGMA table_info({table})")
     return {row[1] for row in cur.fetchall()}
@@ -50,6 +56,27 @@ def _add_missing_columns(conn: sqlite3.Connection, table: str, columns: dict[str
     for column, col_type in columns.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+
+def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY
+        )
+        """
+    )
+
+
+def _get_version(conn: sqlite3.Connection) -> int:
+    _ensure_migrations_table(conn)
+    cur = conn.execute("SELECT MAX(version) FROM schema_migrations")
+    row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def _set_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute("INSERT OR REPLACE INTO schema_migrations (version) VALUES (?)", (version,))
 
 
 def _create_inventory(conn: sqlite3.Connection) -> None:
@@ -194,19 +221,184 @@ def _ensure_fts(conn: sqlite3.Connection) -> None:
         return
 
 
+def _create_woo_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_name TEXT,
+            store_url TEXT NOT NULL,
+            woo_consumer_key TEXT NOT NULL,
+            woo_consumer_secret TEXT NOT NULL,
+            webhook_secret TEXT NOT NULL,
+            webhook_ids TEXT,
+            discogs_token TEXT,
+            discogs_username TEXT,
+            discogs_user_id INTEGER,
+            discogs_last_sync_at TEXT,
+            settings_json TEXT,
+            is_enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_map (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            internal_product_id INTEGER NOT NULL,
+            woo_product_id INTEGER,
+            woo_variation_id INTEGER,
+            sku TEXT,
+            discogs_listing_id INTEGER,
+            discogs_release_id INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_map_store_internal
+        ON product_map(store_id, internal_product_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_map_store_woo
+        ON product_map(store_id, woo_product_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_map_store_variation
+        ON product_map(store_id, woo_variation_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_map_store_sku
+        ON product_map(store_id, sku)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            woo_order_id INTEGER NOT NULL,
+            status TEXT,
+            total REAL,
+            currency TEXT,
+            billing_name TEXT,
+            billing_email TEXT,
+            billing_phone TEXT,
+            shipping_name TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            last_seen_hash TEXT,
+            inventory_applied_at TEXT,
+            needs_review INTEGER DEFAULT 0,
+            FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
+            UNIQUE (store_id, woo_order_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS order_line_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            woo_line_item_id INTEGER,
+            internal_product_id INTEGER,
+            sku TEXT,
+            quantity INTEGER,
+            price REAL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_order_line_item_unique
+        ON order_line_items(order_id, woo_line_item_id, internal_product_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_order_line_item_woo_id
+        ON order_line_items(order_id, woo_line_item_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            event_key TEXT NOT NULL UNIQUE,
+            woo_order_id INTEGER,
+            topic TEXT,
+            payload_hash TEXT,
+            received_at TEXT DEFAULT (datetime('now')),
+            processed_at TEXT,
+            status TEXT,
+            error_message TEXT,
+            FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
 def migrate() -> None:
     with get_inventory_db() as conn:
-        _create_inventory(conn)
-        _add_missing_columns(conn, "inventory", INVENTORY_COLUMNS)
-        _add_missing_columns(conn, "user_sessions", {
-            "username": "TEXT",
-            "first_name": "TEXT",
-            "authenticated_at": "TEXT",
-            "expires_at": "TEXT",
-            "last_activity": "TEXT",
-        })
-        _ensure_indexes(conn)
-        _ensure_fts(conn)
+        current_version = _get_version(conn)
+        if current_version < 1:
+            _create_inventory(conn)
+            _add_missing_columns(conn, "inventory", INVENTORY_COLUMNS)
+            _add_missing_columns(
+                conn,
+                "user_sessions",
+                {
+                    "username": "TEXT",
+                    "first_name": "TEXT",
+                    "authenticated_at": "TEXT",
+                    "expires_at": "TEXT",
+                    "last_activity": "TEXT",
+                },
+            )
+            _ensure_indexes(conn)
+            _ensure_fts(conn)
+            _set_version(conn, 1)
+            current_version = 1
+        if current_version < 2:
+            _create_woo_tables(conn)
+            _set_version(conn, 2)
+            current_version = 2
+        if current_version < 3:
+            _add_missing_columns(
+                conn,
+                "stores",
+                {
+                    "discogs_token": "TEXT",
+                    "discogs_username": "TEXT",
+                    "discogs_user_id": "INTEGER",
+                    "discogs_last_sync_at": "TEXT",
+                },
+            )
+            _add_missing_columns(
+                conn,
+                "product_map",
+                {
+                    "discogs_release_id": "INTEGER",
+                },
+            )
+            _add_missing_columns(conn, "inventory", INVENTORY_COLUMNS)
+            _set_version(conn, 3)
+            current_version = 3
         conn.commit()
 
     with get_sales_db() as conn:
