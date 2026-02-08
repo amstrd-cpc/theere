@@ -40,13 +40,16 @@ WOO_MENU_REPAIR_WEBHOOKS = "Repair Webhooks"
 WOO_MENU_RECONCILE = "Reconcile Woo Stock"
 
 DISCOGS_MENU_CONNECTION_ACTIONS = "Discogs Connection"
-DISCOGS_MENU_PUBLISH_ACTIONS = "Publish Listings"
+DISCOGS_MENU_PUBLISH_ACTIONS = "Publish / Add to Discogs"
 DISCOGS_MENU_SYNC_ACTIONS = "Inventory Sync"
 DISCOGS_MENU_CONNECT = "Connect Discogs"
 DISCOGS_MENU_STATUS = "Discogs Status"
 DISCOGS_MENU_PUBLISH = "Publish Listing"
 DISCOGS_MENU_PUBLISH_ALL = "Publish All Listings"
 DISCOGS_MENU_PUBLISH_SELECTION = "Publish Selection"
+DISCOGS_MENU_COLLECTION = "Add to Collection"
+DISCOGS_MENU_COLLECTION_ALL = "Add All to Collection"
+DISCOGS_MENU_COLLECTION_SELECTION = "Add Selection to Collection"
 DISCOGS_MENU_LINK = "Link Listing"
 DISCOGS_MENU_UNLINK = "Unlink Listing"
 DISCOGS_MENU_RECONCILE = "Reconcile Discogs Stock"
@@ -73,6 +76,7 @@ def build_main_menu(authenticated: bool) -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(MAIN_MENU_SHOP), KeyboardButton(MAIN_MENU_WOO)],
         [KeyboardButton(MAIN_MENU_DISCOGS), KeyboardButton(MAIN_MENU_SETTINGS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
@@ -81,6 +85,7 @@ def build_shop_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(SHOP_MENU_INVENTORY_ACTIONS), KeyboardButton(SHOP_MENU_SALES_ACTIONS)],
         [KeyboardButton(SHOP_MENU_REPORTS_ACTIONS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -90,6 +95,7 @@ def build_shop_inventory_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(SHOP_MENU_ADD), KeyboardButton(SHOP_MENU_INVENTORY)],
         [KeyboardButton(SHOP_MENU_LOW_STOCK)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_SHOP)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -98,6 +104,7 @@ def build_shop_inventory_menu() -> ReplyKeyboardMarkup:
 def build_shop_sales_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(SHOP_MENU_SELL), KeyboardButton(SHOP_MENU_RECENT_SALES)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_SHOP)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -108,6 +115,7 @@ def build_shop_reports_menu() -> ReplyKeyboardMarkup:
         [KeyboardButton(SHOP_MENU_REPORTS)],
         [KeyboardButton(SHOP_MENU_DAILY), KeyboardButton(SHOP_MENU_WEEKLY)],
         [KeyboardButton(SHOP_MENU_MONTHLY)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_SHOP)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -117,6 +125,7 @@ def build_woo_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(WOO_MENU_SETUP_ACTIONS), KeyboardButton(WOO_MENU_ORDERS_ACTIONS)],
         [KeyboardButton(WOO_MENU_MAPPING_ACTIONS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -128,6 +137,7 @@ def build_woo_setup_menu() -> ReplyKeyboardMarkup:
         [KeyboardButton(WOO_MENU_SETTINGS)],
         [KeyboardButton(WOO_MENU_REPAIR_WEBHOOKS)],
         [KeyboardButton(WOO_MENU_RECONCILE)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_WOO)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -136,6 +146,7 @@ def build_woo_setup_menu() -> ReplyKeyboardMarkup:
 def build_woo_orders_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(WOO_MENU_ORDERS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_WOO)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -144,6 +155,7 @@ def build_woo_orders_menu() -> ReplyKeyboardMarkup:
 def build_woo_mapping_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(WOO_MENU_MAP), KeyboardButton(WOO_MENU_AUTO_MAP)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_WOO)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -151,8 +163,11 @@ def build_woo_mapping_menu() -> ReplyKeyboardMarkup:
 
 def build_discogs_menu() -> ReplyKeyboardMarkup:
     buttons = [
+        [KeyboardButton(DISCOGS_MENU_PUBLISH)],
+        [KeyboardButton(DISCOGS_MENU_COLLECTION)],
         [KeyboardButton(DISCOGS_MENU_CONNECTION_ACTIONS), KeyboardButton(DISCOGS_MENU_PUBLISH_ACTIONS)],
         [KeyboardButton(DISCOGS_MENU_SYNC_ACTIONS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -161,6 +176,7 @@ def build_discogs_menu() -> ReplyKeyboardMarkup:
 def build_discogs_connection_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(DISCOGS_MENU_CONNECT), KeyboardButton(DISCOGS_MENU_STATUS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_DISCOGS)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -170,6 +186,9 @@ def build_discogs_publish_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(DISCOGS_MENU_PUBLISH)],
         [KeyboardButton(DISCOGS_MENU_PUBLISH_ALL), KeyboardButton(DISCOGS_MENU_PUBLISH_SELECTION)],
+        [KeyboardButton(DISCOGS_MENU_COLLECTION)],
+        [KeyboardButton(DISCOGS_MENU_COLLECTION_ALL), KeyboardButton(DISCOGS_MENU_COLLECTION_SELECTION)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_DISCOGS)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -180,6 +199,7 @@ def build_discogs_sync_menu() -> ReplyKeyboardMarkup:
         [KeyboardButton(DISCOGS_MENU_LINK), KeyboardButton(DISCOGS_MENU_UNLINK)],
         [KeyboardButton(DISCOGS_MENU_REFRESH)],
         [KeyboardButton(DISCOGS_MENU_RECONCILE), KeyboardButton(WOO_MENU_RECONCILE)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_DISCOGS)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -188,6 +208,7 @@ def build_discogs_sync_menu() -> ReplyKeyboardMarkup:
 def build_settings_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(SETTINGS_MENU_ACCOUNT_ACTIONS), KeyboardButton(SETTINGS_MENU_SUPPORT_ACTIONS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -197,6 +218,7 @@ def build_settings_account_menu() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(SETTINGS_MENU_STATUS), KeyboardButton(SETTINGS_MENU_USERS)],
         [KeyboardButton(SETTINGS_MENU_LOGOUT)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_SETTINGS)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)

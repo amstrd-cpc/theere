@@ -58,6 +58,20 @@ def fetch_listing(store: Dict[str, Any], listing_id: int) -> Dict[str, Any]:
     return client.get(f"/marketplace/listings/{listing_id}")
 
 
+def add_to_collection(store: Dict[str, Any], release_id: int, *, folder_id: int = 1) -> Dict[str, Any]:
+    username = store.get("discogs_username")
+    if not username:
+        identity = get_identity(store)
+        username = identity.get("username")
+    if not username:
+        raise DiscogsNotConfigured("Discogs username not configured for this store.")
+    client = _client(store)
+    return client.post(
+        f"/users/{username}/collection/folders/{folder_id}/releases/{int(release_id)}",
+        {},
+    )
+
+
 def format_tracklist(tracklist: List[Dict[str, Any]]) -> str:
     if not tracklist:
         return ""

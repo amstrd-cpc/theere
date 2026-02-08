@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
@@ -20,18 +22,42 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     settings = get_store_settings(int(store["id"]))
+    webhook_ids = {}
+    if store.get("webhook_ids"):
+        try:
+            webhook_ids = json.loads(store["webhook_ids"])
+        except json.JSONDecodeError:
+            webhook_ids = {}
+    webhook_count = len([value for value in webhook_ids.values() if value])
+    woo_connected = bool(store.get("woo_consumer_key") and store.get("woo_consumer_secret"))
+    discogs_connected = bool(store.get("discogs_token"))
     text = (
-        "⚙️ Store Settings\n"
+        "⚙️ Store Settings\n\n"
+        "🏪 Store\n"
+        f"• Store ID: {store.get('id')}\n"
+        f"• Name: {store.get('store_name') or 'unnamed'}\n"
+        f"• URL: {store.get('store_url')}\n"
+        f"• Enabled: {bool(store.get('is_enabled'))}\n"
+        f"• Created: {store.get('created_at')}\n"
+        f"• Updated: {store.get('updated_at')}\n\n"
+        "🔌 Integrations & Status\n"
+        f"• Woo connected: {woo_connected}\n"
+        f"• Woo webhooks configured: {webhook_count} active\n"
+        f"• Discogs connected: {discogs_connected}\n"
+        f"• Discogs user: {store.get('discogs_username') or 'not set'}\n"
+        f"• Discogs last sync: {store.get('discogs_last_sync_at') or 'never'}\n\n"
+        "🔄 Sync Settings\n"
         f"• Auto decrement: {settings.get('auto_decrement_enabled')}\n"
         f"• Trigger status: {settings.get('auto_decrement_status')}\n"
-        f"• Discogs sync: {settings.get('discogs_sync_on_sale')}\n"
+        f"• Discogs sync on sale: {settings.get('discogs_sync_on_sale')}\n"
         f"• Discogs price sync: {settings.get('discogs_price_sync')}\n"
         f"• Discogs polling: {settings.get('discogs_polling_enabled')}\n"
         f"• Discogs interval: {settings.get('discogs_polling_interval_minutes')} min\n"
         f"• Three-way sync: {settings.get('three_way_sync_enabled')}\n"
         f"• 3-way Discogs interval: {settings.get('three_way_discogs_interval_minutes')} min\n"
         f"• 3-way Woo interval: {settings.get('three_way_woo_interval_minutes')} min\n"
-        f"• Notification chat: {settings.get('notification_chat_id') or 'default'}\n\n"
+        f"• Notification chat: {settings.get('notification_chat_id') or 'default'}\n"
+        f"• Verify SSL: {settings.get('verify_ssl')}\n\n"
         "Update with: /settings auto_decrement on|off, /settings status <status>, "
         "/settings discogs on|off, /settings discogs_price on|off, "
         "/settings discogs_poll on|off, /settings discogs_interval <minutes>, "
