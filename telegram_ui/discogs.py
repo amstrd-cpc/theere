@@ -11,7 +11,7 @@ from services.discogs_service import DiscogsNotConfigured, add_to_collection, cr
 from services.inventory_service import get_inventory_by_id, search_inventory, update_inventory_fields
 from services.product_map_service import clear_discogs_listing, find_mapping_by_internal_id, upsert_product_map
 from services.runtime import run_blocking
-from services.store_service import get_default_store, update_store_discogs
+from services.store_service import get_default_store, get_store_settings, update_store_discogs
 from telegram_ui.auth import require_admin, require_auth
 
 ASK_TOKEN = 0
@@ -32,6 +32,15 @@ DISCogs_ACTIONS = {
     "discogs_refresh": "Refresh Discogs quantity",
     "sync_discogs_all": "Sync all to Discogs",
 }
+
+
+def _listings_enabled(store_id: int) -> bool:
+    settings = get_store_settings(store_id)
+    return bool(settings.get("discogs_listings_enabled"))
+
+
+async def _reject_listings_disabled(target) -> None:
+    await target.reply_text("🚧 Discogs listings sync is coming soon. Collection sync is available now.")
 
 
 def _discogs_payload(item: dict, *, price: float, condition: str, sleeve_condition: str) -> dict:
@@ -242,6 +251,9 @@ async def publish_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
+    if not _listings_enabled(int(store["id"])):
+        await _reject_listings_disabled(update.message)
+        return ConversationHandler.END
     await update.message.reply_text("Tell me the artist or album name to publish on Discogs:")
     context.user_data["discogs_action"] = "publish_discogs"
     return SEARCHING
@@ -254,6 +266,9 @@ async def publish_discogs_all(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
+    if not _listings_enabled(int(store["id"])):
+        await _reject_listings_disabled(update.message)
+        return ConversationHandler.END
     await update.message.reply_text("Tell me the artist or album name to publish ALL matches on Discogs:")
     context.user_data["discogs_action"] = "publish_discogs_all"
     return SEARCHING
@@ -266,6 +281,9 @@ async def publish_discogs_selection(update: Update, context: ContextTypes.DEFAUL
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
+    if not _listings_enabled(int(store["id"])):
+        await _reject_listings_disabled(update.message)
+        return ConversationHandler.END
     await update.message.reply_text("Tell me the artist or album name to select items for Discogs publishing:")
     context.user_data["discogs_action"] = "publish_discogs_selection"
     return SEARCHING

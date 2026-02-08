@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import logging
 from typing import Optional
 
@@ -17,10 +16,10 @@ from services.inventory_service import (
     update_inventory_supplier,
 )
 from services.runtime import run_blocking
+from services.store_service import get_default_store
 from services.woo_service import is_configured
 from telegram_ui import messages
 from telegram_ui.auth import require_auth
-from woocommerce_client import payload_for_update_from_inventory, update_product_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -204,21 +203,16 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
             await query.edit_message_text(messages.WOO_NOT_CONFIGURED_MESSAGE)
             return LISTING
 
-        woo_product_id = item.get("woo_product_id")
-        if not woo_product_id:
-            await query.edit_message_text(messages.INVENTORY_SYNC_MISSING_WOO)
-            return LISTING
+        logger.info("Manual Woo sync requested for inventory id=%s", item.get("id"))
 
-        payload = payload_for_update_from_inventory(item)
-        logger.info(
-            "Woo sync inventory id=%s woo_product_id=%s fields=%s",
-            item.get("id"),
-            woo_product_id,
-            sorted(payload.keys()),
-        )
+        from services import sync_engine
 
         try:
-            await run_blocking(update_product_by_id, int(woo_product_id), payload)
+            store = await run_blocking(get_default_store)
+            if not store:
+                await query.edit_message_text(messages.WOO_NOT_CONFIGURED_MESSAGE)
+                return LISTING
+            await run_blocking(sync_engine.SyncEngine().run_instant_sync_for_item, int(store["id"]), item_id)
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response else None
             if status == 404:
@@ -229,15 +223,6 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
         except Exception as exc:
             await query.edit_message_text(messages.INVENTORY_SYNC_ERROR.format(error=str(exc)))
             return LISTING
-
-        await run_blocking(
-            update_inventory_fields,
-            item_id,
-            {
-                "woo_synced": 1,
-                "woo_last_synced_at": datetime.datetime.utcnow().isoformat(),
-            },
-        )
         await query.edit_message_text(messages.INVENTORY_SYNC_SUCCESS, reply_markup=_build_edit_menu(item_id))
         return LISTING
 

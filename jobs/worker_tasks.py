@@ -86,7 +86,7 @@ def apply_inventory_decrement_for_order(
         logger.info("Inventory already applied for order %s", woo_order_id)
         return
 
-    matched_items: List[str] = []
+    matched_items: List[Dict[str, Any]] = []
     unmapped_items: List[str] = []
     discogs_updates: List[tuple[int, int, float]] = []
 
@@ -141,26 +141,41 @@ def apply_inventory_decrement_for_order(
                 "woo_synced": 1,
                 "woo_last_synced_at": datetime.datetime.utcnow().isoformat(),
             },
+            sync_channels=False,
+            source="order_decrement",
+            store_id=store_id,
+            correlation_id=str(woo_order_id),
+            note=f"Woo order {woo_order_id} decrement",
         )
         for _ in range(qty):
             record_sale(inv, per_price, order.get("payment_method") or "woo")
 
-        matched_items.append(f"ID {internal_id} qty {qty} (left {new_qty})")
+        matched_items.append(
+            {
+                "theere_id": internal_id,
+                "name": line.get("name") or inv.get("artist_album") or "Unknown",
+                "qty": qty,
+                "remaining": new_qty,
+            }
+        )
 
         if mapping and mapping.get("discogs_listing_id"):
             discogs_updates.append((int(mapping["discogs_listing_id"]), new_qty, float(inv.get("price_gel") or 0)))
 
+    settings = get_store_settings(store_id)
+    notify_admin_enabled = bool(settings.get("orders_admin_notifications"))
+
     if unmapped_items:
         order_service.mark_needs_review(order_id, True)
-        notify_admin(
-            store,
-            f"⚠️ Order {woo_order_id} has unmapped items: {', '.join(unmapped_items)}",
-        )
+        if notify_admin_enabled:
+            notify_admin(
+                store,
+                f"⚠️ Order {woo_order_id} has unmapped items: {', '.join(unmapped_items)}",
+            )
     else:
         order_service.mark_needs_review(order_id, False)
         order_service.mark_inventory_applied(order_id)
 
-    settings = get_store_settings(store_id)
     if settings.get("discogs_sync_on_sale"):
         for listing_id, remaining, price in discogs_updates:
             try:
@@ -169,10 +184,24 @@ def apply_inventory_decrement_for_order(
                     update_listing(store, listing_id, {"price": f"{price:.2f}"})
             except Exception as exc:
                 logger.exception("Failed updating Discogs listing %s", listing_id)
-                notify_admin(store, f"⚠️ Discogs update failed for listing {listing_id}: {exc}")
+                if notify_admin_enabled:
+                    notify_admin(store, f"⚠️ Discogs update failed for listing {listing_id}: {exc}")
 
-    if matched_items:
-        notify_admin(store, f"💿 Woo order {woo_order_id} applied: {', '.join(matched_items)}")
+    if matched_items and notify_admin_enabled:
+        item_lines = "\n".join(
+            f"• ID {item['theere_id']} — {item['name']} × {item['qty']}"
+            for item in matched_items
+        )
+        notes = (order.get("customer_note") or "").strip()
+        note_line = f"\n📝 Notes: {notes}" if notes else ""
+        total = order.get("total")
+        currency = order.get("currency") or "GEL"
+        notify_admin(
+            store,
+            f"💿 Woo order {woo_order_id} applied\n"
+            f"{item_lines}\n"
+            f"💰 Total: {total} {currency}{note_line}",
+        )
 
 
 def _extract_theere_id(line: Dict[str, Any]) -> int | None:

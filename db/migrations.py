@@ -17,6 +17,9 @@ INVENTORY_COLUMNS = {
     "quantity": "INTEGER",
     "supplier_id": "INTEGER",
     "created_at": "TEXT",
+    "updated_at": "TEXT",
+    "local_rev": "INTEGER NOT NULL DEFAULT 0",
+    "last_change_source": "TEXT",
     "woo_product_id": "INTEGER",
     "woo_synced": "INTEGER",
     "woo_last_synced_at": "TEXT",
@@ -44,7 +47,7 @@ SALES_COLUMNS = {
 }
 
 
-LATEST_VERSION = 4
+LATEST_VERSION = 5
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -264,6 +267,7 @@ def _create_woo_tables(conn: sqlite3.Connection) -> None:
             woo_last_seen_price REAL,
             woo_last_seen_at TEXT,
             woo_last_seen_hash TEXT,
+            woo_last_seen_modified_at TEXT,
             last_sync_direction TEXT,
             last_sync_hash TEXT,
             last_sync_at TEXT,
@@ -365,6 +369,73 @@ def _create_woo_tables(conn: sqlite3.Connection) -> None:
         """
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inventory_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            store_id INTEGER,
+            internal_product_id INTEGER NOT NULL,
+            theere_id TEXT,
+            field TEXT CHECK(field IN ('quantity', 'regular_price')) NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            source TEXT CHECK(source IN (
+                'manual_bot',
+                'manual_woo',
+                'order_decrement',
+                'sync_pull',
+                'sync_push',
+                'import_restore'
+            )) NOT NULL,
+            correlation_id TEXT,
+            note TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sync_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_started TEXT NOT NULL,
+            ts_finished TEXT,
+            store_id INTEGER NOT NULL,
+            run_type TEXT CHECK(run_type IN ('periodic', 'instant', 'manual')) NOT NULL,
+            pulled_count INTEGER DEFAULT 0,
+            pushed_count INTEGER DEFAULT 0,
+            created_local_count INTEGER DEFAULT 0,
+            mapping_fixed_count INTEGER DEFAULT 0,
+            errors_count INTEGER DEFAULT 0,
+            last_error TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sync_locks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            internal_product_id INTEGER NOT NULL,
+            lock_owner TEXT NOT NULL,
+            locked_at TEXT NOT NULL,
+            UNIQUE(store_id, internal_product_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_started TEXT NOT NULL,
+            ts_finished TEXT,
+            backup_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            path TEXT,
+            error TEXT
+        )
+        """
+    )
+
 
 def migrate() -> None:
     with get_inventory_db() as conn:
@@ -433,6 +504,26 @@ def migrate() -> None:
             )
             _set_version(conn, 4)
             current_version = 4
+        if current_version < 5:
+            _add_missing_columns(
+                conn,
+                "inventory",
+                {
+                    "updated_at": "TEXT",
+                    "local_rev": "INTEGER NOT NULL DEFAULT 0",
+                    "last_change_source": "TEXT",
+                },
+            )
+            _add_missing_columns(
+                conn,
+                "product_map",
+                {
+                    "woo_last_seen_modified_at": "TEXT",
+                },
+            )
+            _create_woo_tables(conn)
+            _set_version(conn, 5)
+            current_version = 5
         conn.commit()
 
     with get_sales_db() as conn:

@@ -94,6 +94,7 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
 
     settings = get_store_settings(store_id)
     sync_price = bool(settings.get("discogs_price_sync"))
+    listings_enabled = bool(settings.get("discogs_listings_enabled"))
     items = get_all_inventory()
     collection_release_counts, collection_name_counts = _build_collection_index(store)
     results = {
@@ -121,6 +122,9 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
                     item_id,
                     {"quantity": quantity, "price_gel": price},
                     sync_channels=False,
+                    source="sync_pull",
+                    store_id=store_id,
+                    note="Woo snapshot applied during Discogs sync",
                 )
                 item["quantity"] = quantity
                 item["price_gel"] = price
@@ -178,7 +182,7 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
         listing_id = mapping.get("discogs_listing_id") if mapping else None
         quantity = int(item.get("quantity") or 0)
         price = float(item.get("price_gel") or 0)
-        if listing_id:
+        if listings_enabled and listing_id:
             try:
                 update_listing_quantity(store, int(listing_id), quantity)
                 if sync_price:
@@ -189,7 +193,7 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
                 results["listing_failed"] += 1
             continue
 
-        if not publish_missing:
+        if not publish_missing or not listings_enabled:
             continue
 
         if not _has_listing_fields(item):
@@ -222,7 +226,7 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
             logger.exception("Failed publishing Discogs listing for inventory %s", item_id)
             results["listing_failed"] += 1
 
-    if results["listing_updated"] or results["listing_published"]:
+    if results["listing_updated"] or results["listing_published"] or results["collection_added"]:
         update_discogs_sync_time(store_id)
 
     return results

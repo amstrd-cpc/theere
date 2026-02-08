@@ -18,17 +18,14 @@ from services.inventory_service import (
     get_suppliers,
     insert_inventory,
     get_inventory_by_id,
-    update_inventory_sync,
     update_inventory_fields,
 )
-from services.product_map_service import upsert_product_map
+from services.product_map_service import find_mapping_by_internal_id
 from services.runtime import run_blocking
+from services.sync_engine import SyncEngine
 from services.woo_service import (
     WooNotConfigured,
     category_names_from_inventory,
-    payload_from_inventory,
-    upsert_product_from_inventory,
-    compute_sync_hash,
     upload_media,
     fetch_next_sku,
 )
@@ -442,7 +439,12 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
         })
 
         try:
-            woo_product = await run_blocking(upsert_product_from_inventory, inventory_row)
+            store = context.user_data.get("store")
+            if store:
+                await run_blocking(SyncEngine().run_instant_sync_for_item, int(store["id"]), int(inventory_id))
+                mapping = await run_blocking(find_mapping_by_internal_id, int(store["id"]), int(inventory_id))
+            else:
+                mapping = None
         except WooNotConfigured:
             await update.effective_message.reply_text(messages.ADD_WOO_NOT_CONFIGURED)
         except Exception as exc:
@@ -451,28 +453,20 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
                 messages.ADD_WOO_FAILED.format(error=f"{type(exc).__name__}: {exc}")
             )
         else:
-            woo_id = woo_product.get("id")
-            if woo_id:
-                sync_hash = compute_sync_hash(payload_from_inventory(inventory_row))
-                await run_blocking(update_inventory_sync, inventory_id, int(woo_id), sync_hash)
-                store = context.user_data.get("store")
-                if store:
-                    await run_blocking(
-                        upsert_product_map,
-                        store_id=int(store["id"]),
-                        internal_product_id=int(inventory_id),
-                        woo_product_id=int(woo_id),
-                        sku=str(inventory_id),
-                        discogs_release_id=item.get("discogs_release_id"),
-                    )
+            woo_id = mapping.get("woo_product_id") if mapping else None
             category_names = ", ".join(category_names_from_inventory(inventory_row))
-            await update.effective_message.reply_text(
-                messages.ADD_WOO_OK_DETAILS.format(
-                    inventory_id=inventory_id,
-                    woo_id=woo_id,
-                    categories=category_names or "N/A",
+            if woo_id:
+                await update.effective_message.reply_text(
+                    messages.ADD_WOO_OK_DETAILS.format(
+                        inventory_id=inventory_id,
+                        woo_id=woo_id,
+                        categories=category_names or "N/A",
+                    )
                 )
-            )
+            else:
+                await update.effective_message.reply_text(
+                    messages.ADD_SAVED_LOCAL.format(inventory_id=inventory_id)
+                )
     except Exception as exc:
         logger.exception("Error saving inventory row")
         await update.effective_message.reply_text(messages.ADD_SAVE_ERROR.format(error=str(exc)))
@@ -650,7 +644,12 @@ async def _finalize_other_item(update: Update, context: ContextTypes.DEFAULT_TYP
             await run_blocking(update_inventory_fields, inventory_id, {"cover_url": cover_url})
 
         try:
-            woo_product = await run_blocking(upsert_product_from_inventory, inventory_row)
+            store = context.user_data.get("store")
+            if store:
+                await run_blocking(SyncEngine().run_instant_sync_for_item, int(store["id"]), int(inventory_id))
+                mapping = await run_blocking(find_mapping_by_internal_id, int(store["id"]), int(inventory_id))
+            else:
+                mapping = None
         except WooNotConfigured:
             await update.effective_message.reply_text(messages.ADD_WOO_NOT_CONFIGURED)
         except Exception as exc:
@@ -659,27 +658,20 @@ async def _finalize_other_item(update: Update, context: ContextTypes.DEFAULT_TYP
                 messages.ADD_WOO_FAILED.format(error=f"{type(exc).__name__}: {exc}")
             )
         else:
-            woo_id = woo_product.get("id")
-            if woo_id:
-                sync_hash = compute_sync_hash(payload_from_inventory(inventory_row))
-                await run_blocking(update_inventory_sync, inventory_id, int(woo_id), sync_hash)
-                store = context.user_data.get("store")
-                if store:
-                    await run_blocking(
-                        upsert_product_map,
-                        store_id=int(store["id"]),
-                        internal_product_id=int(inventory_id),
-                        woo_product_id=int(woo_id),
-                        sku=str(inventory_id),
-                    )
+            woo_id = mapping.get("woo_product_id") if mapping else None
             category_names = ", ".join(category_names_from_inventory(inventory_row))
-            await update.effective_message.reply_text(
-                messages.ADD_WOO_OK_DETAILS.format(
-                    inventory_id=inventory_id,
-                    woo_id=woo_id,
-                    categories=category_names or "N/A",
+            if woo_id:
+                await update.effective_message.reply_text(
+                    messages.ADD_WOO_OK_DETAILS.format(
+                        inventory_id=inventory_id,
+                        woo_id=woo_id,
+                        categories=category_names or "N/A",
+                    )
                 )
-            )
+            else:
+                await update.effective_message.reply_text(
+                    messages.ADD_SAVED_LOCAL.format(inventory_id=inventory_id)
+                )
     except Exception as exc:
         logger.exception("Error saving other inventory row")
         await update.effective_message.reply_text(messages.ADD_SAVE_ERROR.format(error=str(exc)))
