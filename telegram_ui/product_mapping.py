@@ -187,6 +187,7 @@ async def auto_map_woo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✅ Auto-mapping complete.\n"
         f"🔗 Linked: {result.get('linked', 0)}\n"
+        f"🆕 Created: {result.get('created', 0)}\n"
         f"⚠️ Ambiguous: {result.get('ambiguous', 0)}\n"
         f"⏭️ Skipped: {result.get('skipped', 0)}"
     )

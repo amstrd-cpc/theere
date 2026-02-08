@@ -147,6 +147,46 @@ def insert_inventory(item: Dict[str, Any]) -> int:
         return int(cur.lastrowid)
 
 
+def insert_inventory_with_id(item_id: int, item: Dict[str, Any]) -> int:
+    ensure_inventory_sequence()
+    with get_inventory_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO inventory (
+                id, artist_album, genre, style, label, format, condition, sleeve_condition, price_gel,
+                quantity, supplier_id, created_at, year, description, cover_url,
+                discogs_release_id, discogs_master_id, discogs_uri
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item_id,
+                item.get("artist_album"),
+                item.get("genre"),
+                item.get("style"),
+                item.get("label"),
+                item.get("format"),
+                item.get("condition"),
+                item.get("sleeve_condition"),
+                item.get("price_gel"),
+                item.get("quantity"),
+                item.get("supplier_id"),
+                item.get("created_at") or datetime.datetime.utcnow().isoformat(),
+                item.get("year"),
+                item.get("description"),
+                item.get("cover_url"),
+                item.get("discogs_release_id"),
+                item.get("discogs_master_id"),
+                item.get("discogs_uri"),
+            ),
+        )
+        conn.execute(
+            "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'inventory'",
+            (item_id,),
+        )
+        conn.commit()
+        return item_id
+
+
 def update_inventory_sync(item_id: int, woo_product_id: int, sync_hash: str) -> None:
     with get_inventory_db() as conn:
         conn.execute(
