@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import logging
 import datetime
-from typing import Any, Dict
 
 from telegram import Bot
 
-from config.settings import load_settings
 from services.inventory_service import get_unsynced_inventory, update_inventory_sync
 from services.runtime import run_blocking
-from services.woo_orders_service import process_woo_order
+from services.store_service import get_default_store
 from services.woo_service import WooNotConfigured, fetch_orders, is_configured, upsert_product_from_inventory, compute_sync_hash
+from jobs.worker_tasks import sync_order_state
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,9 @@ async def sync_inventory_to_woo() -> None:
 async def poll_recent_woo_orders(bot: Bot, hours: int = 6) -> None:
     if not is_configured():
         return
-    settings = load_settings()
+    store = get_default_store()
+    if not store:
+        return
     after = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=hours)).isoformat()
     page = 1
     while True:
@@ -42,6 +43,7 @@ async def poll_recent_woo_orders(bot: Bot, hours: int = 6) -> None:
             orders = await run_blocking(
                 fetch_orders,
                 {"status": "processing", "after": after, "page": page, "per_page": 50},
+                store,
             )
         except WooNotConfigured:
             return
@@ -53,31 +55,10 @@ async def poll_recent_woo_orders(bot: Bot, hours: int = 6) -> None:
             break
 
         for order in orders:
-            info = await run_blocking(process_woo_order, order)
-            if info.get("already_processed"):
+            if not order.get("id"):
                 continue
-            await _send_order_notification(bot, info, settings.admin_chat_id)
+            await run_blocking(sync_order_state, int(store["id"]), int(order["id"]))
 
         if len(orders) < 50:
             break
         page += 1
-
-
-async def _send_order_notification(bot: Bot, info: Dict[str, Any], admin_chat_id: int | None) -> None:
-    if not admin_chat_id:
-        return
-    order_id = info.get("order_id")
-    items = info.get("items", [])
-    already = info.get("already_processed", False)
-    skipped = info.get("skipped", False)
-    if already or skipped or not items:
-        return
-
-    for inv, qty, _price, remaining in items:
-        await bot.send_message(
-            chat_id=admin_chat_id,
-            text=(
-                f"💿 SOLD: ID {inv['id']} — {inv['artist_album']} (qty {qty}). "
-                f"Remaining: {remaining}. Order #{order_id}"
-            ),
-        )

@@ -97,9 +97,15 @@ def needs_update(existing: dict, item: dict) -> bool:
 
     # If description doesn't include Tracklist and Discogs is configured, update once.
     desc = existing.get('description') or ''
-    if 'Tracklist' not in desc and os.getenv('DISCOGS_TOKEN'):
-        return True
+    if 'Tracklist' not in desc:
+        try:
+            from services.store_service import get_default_store
 
+            store = get_default_store()
+            if store and store.get("discogs_token"):
+                return True
+        except Exception:
+            pass
     return False
 
 

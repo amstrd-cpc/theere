@@ -12,7 +12,7 @@ from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from services import discogs_service
-from config.settings import load_settings
+from services.store_service import get_default_store
 from services.inventory_service import (
     get_or_create_supplier,
     get_suppliers,
@@ -21,6 +21,7 @@ from services.inventory_service import (
     update_inventory_sync,
     update_inventory_fields,
 )
+from services.product_map_service import upsert_product_map
 from services.runtime import run_blocking
 from services.woo_service import (
     WooNotConfigured,
@@ -141,6 +142,8 @@ async def _validate_add_session(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    store = await run_blocking(get_default_store)
+    context.user_data["store"] = store
     session_id = _start_add_session(context)
     try:
         next_id = await run_blocking(fetch_next_sku)
@@ -177,8 +180,8 @@ async def handle_add_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, _, rest = parsed
     choice = rest[0] if rest else ""
     if choice == "record":
-        settings = load_settings()
-        if not settings.discogs_token:
+        store = context.user_data.get("store")
+        if not store or not store.get("discogs_token"):
             await update.callback_query.edit_message_text(messages.ADD_DISCOGS_MISSING)
             return ConversationHandler.END
         context.user_data["product_type"] = "record"
@@ -203,7 +206,8 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = context.user_data["query"]
     session_id = context.user_data.get("add_session_id", "")
     try:
-        results = await run_blocking(discogs_service.search_releases, query, page, 50)
+        store = context.user_data.get("store")
+        results = await run_blocking(discogs_service.search_releases, store, query, page, 50)
     except discogs_service.DiscogsNotConfigured:
         await update.effective_message.reply_text(messages.ADD_DISCOGS_MISSING)
         return ConversationHandler.END
@@ -260,7 +264,8 @@ async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TY
     idx = int(rest[0])
     selected = context.user_data["results"][idx]
     release_id = selected.get("id")
-    release = await run_blocking(discogs_service.fetch_release, int(release_id))
+    store = context.user_data.get("store")
+    release = await run_blocking(discogs_service.fetch_release, store, int(release_id))
     context.user_data["release"] = release
     session_id = context.user_data.get("add_session_id", "")
 
@@ -291,7 +296,8 @@ async def handle_condition_select(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["condition"] = cond
     release = context.user_data["release"]
 
-    suggestions = await run_blocking(discogs_service.fetch_price_suggestions, int(release.get("id")))
+    store = context.user_data.get("store")
+    suggestions = await run_blocking(discogs_service.fetch_price_suggestions, store, int(release.get("id")))
     full_condition = _condition_label(cond)
 
     price_usd = suggestions.get(full_condition, {}).get("value") if suggestions else None
@@ -411,6 +417,15 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text(
             messages.ADD_SAVED_LOCAL.format(inventory_id=inventory_id)
         )
+        store = context.user_data.get("store")
+        if store:
+            await run_blocking(
+                upsert_product_map,
+                store_id=int(store["id"]),
+                internal_product_id=int(inventory_id),
+                discogs_release_id=item.get("discogs_release_id"),
+                sku=str(inventory_id),
+            )
 
         inventory_row = await run_blocking(get_inventory_by_id, inventory_id)
         if not inventory_row:
@@ -440,6 +455,16 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
             if woo_id:
                 sync_hash = compute_sync_hash(payload_from_inventory(inventory_row))
                 await run_blocking(update_inventory_sync, inventory_id, int(woo_id), sync_hash)
+                store = context.user_data.get("store")
+                if store:
+                    await run_blocking(
+                        upsert_product_map,
+                        store_id=int(store["id"]),
+                        internal_product_id=int(inventory_id),
+                        woo_product_id=int(woo_id),
+                        sku=str(inventory_id),
+                        discogs_release_id=item.get("discogs_release_id"),
+                    )
             category_names = ", ".join(category_names_from_inventory(inventory_row))
             await update.effective_message.reply_text(
                 messages.ADD_WOO_OK_DETAILS.format(
@@ -638,6 +663,15 @@ async def _finalize_other_item(update: Update, context: ContextTypes.DEFAULT_TYP
             if woo_id:
                 sync_hash = compute_sync_hash(payload_from_inventory(inventory_row))
                 await run_blocking(update_inventory_sync, inventory_id, int(woo_id), sync_hash)
+                store = context.user_data.get("store")
+                if store:
+                    await run_blocking(
+                        upsert_product_map,
+                        store_id=int(store["id"]),
+                        internal_product_id=int(inventory_id),
+                        woo_product_id=int(woo_id),
+                        sku=str(inventory_id),
+                    )
             category_names = ", ".join(category_names_from_inventory(inventory_row))
             await update.effective_message.reply_text(
                 messages.ADD_WOO_OK_DETAILS.format(

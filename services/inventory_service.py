@@ -119,8 +119,9 @@ def insert_inventory(item: Dict[str, Any]) -> int:
             """
             INSERT INTO inventory (
                 artist_album, genre, style, label, format, condition, price_gel,
-                quantity, supplier_id, created_at, year, description, cover_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                quantity, supplier_id, created_at, year, description, cover_url,
+                discogs_release_id, discogs_master_id, discogs_uri
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.get("artist_album"),
@@ -136,6 +137,9 @@ def insert_inventory(item: Dict[str, Any]) -> int:
                 item.get("year"),
                 item.get("description"),
                 item.get("cover_url"),
+                item.get("discogs_release_id"),
+                item.get("discogs_master_id"),
+                item.get("discogs_uri"),
             ),
         )
         conn.commit()
@@ -287,7 +291,7 @@ def reduce_inventory_quantity(item_id: int, amount: int) -> bool:
         return True
 
 
-def update_inventory_fields(item_id: int, fields: Dict[str, Any]) -> None:
+def update_inventory_fields(item_id: int, fields: Dict[str, Any], *, sync_channels: bool = True) -> None:
     if not fields:
         return
     keys = sorted(fields.keys())
@@ -299,6 +303,19 @@ def update_inventory_fields(item_id: int, fields: Dict[str, Any]) -> None:
             (*values, item_id),
         )
         conn.commit()
+    if sync_channels and {"quantity", "price_gel"} & set(keys):
+        try:
+            from services.channel_sync_service import sync_inventory_item
+            from services.store_service import get_default_store, get_store_settings
+
+            store = get_default_store()
+            if not store:
+                return
+            settings = get_store_settings(int(store["id"]))
+            sync_price = bool(settings.get("discogs_price_sync"))
+            sync_inventory_item(int(store["id"]), item_id, sync_price=sync_price)
+        except Exception:
+            logger.exception("Inventory sync failed for item %s", item_id)
 
 
 def update_inventory_supplier(item_id: int, supplier_name: Optional[str]) -> None:
