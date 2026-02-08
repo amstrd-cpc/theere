@@ -113,3 +113,32 @@ def clear_discogs_listing(store_id: int, internal_product_id: int) -> None:
             (now, store_id, internal_product_id),
         )
         conn.commit()
+
+
+def update_product_map_fields(store_id: int, internal_product_id: int, fields: Dict[str, Any]) -> None:
+    if not fields:
+        return
+    now = datetime.datetime.utcnow().isoformat()
+    fields = dict(fields)
+    fields.setdefault("updated_at", now)
+    keys = sorted(fields.keys())
+    assignments = ", ".join(f"{key} = ?" for key in keys)
+    values = [fields[key] for key in keys]
+    values.extend([store_id, internal_product_id])
+    with get_inventory_db() as conn:
+        conn.execute(
+            f"UPDATE product_map SET {assignments} WHERE store_id = ? AND internal_product_id = ?",
+            values,
+        )
+        conn.commit()
+
+
+def get_latest_seen_at(store_id: int, *, channel: str) -> Optional[str]:
+    column = "discogs_last_seen_at" if channel == "discogs" else "woo_last_seen_at"
+    with get_inventory_db() as conn:
+        cur = conn.execute(
+            f"SELECT MAX({column}) AS last_seen FROM product_map WHERE store_id = ?",
+            (store_id,),
+        )
+        row = cur.fetchone()
+        return row["last_seen"] if row else None

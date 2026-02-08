@@ -118,10 +118,10 @@ def insert_inventory(item: Dict[str, Any]) -> int:
         cur = conn.execute(
             """
             INSERT INTO inventory (
-                artist_album, genre, style, label, format, condition, price_gel,
+                artist_album, genre, style, label, format, condition, sleeve_condition, price_gel,
                 quantity, supplier_id, created_at, year, description, cover_url,
                 discogs_release_id, discogs_master_id, discogs_uri
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.get("artist_album"),
@@ -130,6 +130,7 @@ def insert_inventory(item: Dict[str, Any]) -> int:
                 item.get("label"),
                 item.get("format"),
                 item.get("condition"),
+                item.get("sleeve_condition"),
                 item.get("price_gel"),
                 item.get("quantity"),
                 item.get("supplier_id"),
