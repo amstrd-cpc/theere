@@ -64,6 +64,8 @@ Production-ready record store management bot for inventory, sales logging, Disco
 ```bash
 docker compose up --build
 ```
+The default compose configuration stores the SQLite databases in the `recordstore-data` volume
+so Discogs/Woo credentials persist across container restarts or `docker compose down`.
 
 ## WooCommerce Webhook Verification
 Woo sends a `X-WC-Webhook-Signature` header. The API validates it with the per-store webhook secret stored in the DB. Requests without a valid signature are rejected.

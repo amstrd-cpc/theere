@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Optional, Tuple
 
 from services.discogs_service import (
     add_to_collection,
     create_listing,
+    fetch_collection_releases,
     fetch_collection_release_instances,
     update_listing,
     update_listing_quantity,
@@ -41,6 +43,50 @@ def _has_listing_fields(item: Dict[str, Any]) -> bool:
     return True
 
 
+def _normalize_collection_key(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    return " ".join(normalized.split())
+
+
+def _collection_key_from_release(release: Dict[str, Any]) -> Optional[str]:
+    info = release.get("basic_information") or {}
+    title = info.get("title") or release.get("title")
+    if not title:
+        return None
+    artists = info.get("artists") or release.get("artists") or []
+    artist_names = [artist.get("name") for artist in artists if artist.get("name")]
+    artist = ", ".join(artist_names)
+    if artist:
+        return _normalize_collection_key(f"{artist} - {title}")
+    return _normalize_collection_key(str(title))
+
+
+def _collection_key_from_item(item: Dict[str, Any]) -> Optional[str]:
+    artist_album = str(item.get("artist_album") or "").strip()
+    if not artist_album:
+        return None
+    return _normalize_collection_key(artist_album)
+
+
+def _build_collection_index(store: Dict[str, Any]) -> Tuple[Dict[int, int], Dict[str, int]]:
+    release_counts: Dict[int, int] = {}
+    name_counts: Dict[str, int] = {}
+    try:
+        releases = fetch_collection_releases(store)
+    except Exception:
+        logger.exception("Failed fetching Discogs collection snapshot")
+        return release_counts, name_counts
+    for release in releases:
+        release_id = release.get("id") or (release.get("basic_information") or {}).get("id")
+        if release_id:
+            release_id = int(release_id)
+            release_counts[release_id] = release_counts.get(release_id, 0) + 1
+        name_key = _collection_key_from_release(release)
+        if name_key:
+            name_counts[name_key] = name_counts.get(name_key, 0) + 1
+    return release_counts, name_counts
+
+
 def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
     store = get_store(store_id)
     if not store:
@@ -49,6 +95,7 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
     settings = get_store_settings(store_id)
     sync_price = bool(settings.get("discogs_price_sync"))
     items = get_all_inventory()
+    collection_release_counts, collection_name_counts = _build_collection_index(store)
     results = {
         "total_items": len(items),
         "woo_synced": 0,
@@ -85,13 +132,27 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
         release_id = item.get("discogs_release_id")
         if release_id:
             target_qty = max(0, int(item.get("quantity") or 0))
-            try:
-                instances = fetch_collection_release_instances(store, int(release_id))
-                current_qty = len(instances)
-            except Exception:
-                logger.exception("Failed checking Discogs collection for release %s", release_id)
-                results["collection_failed"] += 1
-                current_qty = None
+            name_key = _collection_key_from_item(item)
+            current_qty = None
+            candidates = []
+            release_count = collection_release_counts.get(int(release_id))
+            if release_count is not None:
+                candidates.append(release_count)
+            if name_key:
+                name_count = collection_name_counts.get(name_key)
+                if name_count is not None:
+                    candidates.append(name_count)
+            if candidates:
+                current_qty = max(candidates)
+            else:
+                try:
+                    instances = fetch_collection_release_instances(store, int(release_id))
+                    current_qty = len(instances)
+                    collection_release_counts[int(release_id)] = current_qty
+                except Exception:
+                    logger.exception("Failed checking Discogs collection for release %s", release_id)
+                    results["collection_failed"] += 1
+                    current_qty = None
 
             if current_qty is None:
                 pass
@@ -103,6 +164,11 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
                     try:
                         add_to_collection(store, int(release_id))
                         results["collection_added"] += 1
+                        collection_release_counts[int(release_id)] = (
+                            collection_release_counts.get(int(release_id), current_qty) + 1
+                        )
+                        if name_key:
+                            collection_name_counts[name_key] = collection_name_counts.get(name_key, current_qty) + 1
                     except Exception:
                         logger.exception("Failed adding release %s to Discogs collection", release_id)
                         results["collection_failed"] += 1
