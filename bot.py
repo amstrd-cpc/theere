@@ -19,7 +19,7 @@ from telegram_ui.discogs import create_discogs_handlers
 from telegram_ui.inventory import create_inventory_conversation, low_stock, register_inventory_callbacks
 from telegram_ui.menu import create_menu_handler
 from telegram_ui.orders import create_orders_callback_handler, create_orders_handler
-from telegram_ui.product_mapping import create_map_handler
+from telegram_ui.product_mapping import create_auto_map_handler, create_map_handler
 from telegram_ui.reports import daily_report, monthly_report, report_handler, weekly_report
 from telegram_ui.sales import start_sell_flow
 from telegram_ui.store_settings import create_settings_handler
@@ -96,6 +96,7 @@ def main() -> None:
     application.add_handler(create_orders_handler())
     application.add_handler(create_orders_callback_handler())
     application.add_handler(create_map_handler())
+    application.add_handler(create_auto_map_handler())
     for handler in create_discogs_handlers():
         application.add_handler(handler)
 

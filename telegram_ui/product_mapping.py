@@ -9,6 +9,8 @@ from services.inventory_service import get_inventory_by_id, search_inventory
 from services.product_map_service import upsert_product_map
 from services.runtime import run_blocking
 from services.store_service import get_default_store
+from services.woo_mapping_service import auto_map_woo_products
+from services.woo_service import WooNotConfigured
 from telegram_ui.auth import require_admin, require_auth
 
 SEARCHING, SELECTING, EXTRA_INPUT, CONFIRMING = range(4)
@@ -167,6 +169,29 @@ async def cancel_map(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+@require_auth
+@require_admin
+async def auto_map_woo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store = get_default_store()
+    if not store:
+        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        return
+
+    await update.message.reply_text("🔎 Auto-mapping WooCommerce products to inventory...")
+    try:
+        result = await run_blocking(auto_map_woo_products, store_id=int(store["id"]))
+    except WooNotConfigured:
+        await update.message.reply_text("❌ WooCommerce not configured. Run /setup_woo first.")
+        return
+
+    await update.message.reply_text(
+        "✅ Auto-mapping complete.\n"
+        f"🔗 Linked: {result.get('linked', 0)}\n"
+        f"⚠️ Ambiguous: {result.get('ambiguous', 0)}\n"
+        f"⏭️ Skipped: {result.get('skipped', 0)}"
+    )
+
+
 def create_map_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("map_woo", map_woo)],
@@ -180,3 +205,7 @@ def create_map_handler() -> ConversationHandler:
         name="map_woo",
         persistent=False,
     )
+
+
+def create_auto_map_handler() -> CommandHandler:
+    return CommandHandler("auto_map_woo", auto_map_woo)
