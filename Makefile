@@ -1,45 +1,63 @@
-.PHONY: help install migrate bot api worker test docker-up docker-down
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
 
-VENV ?= .venv
-PYTHON ?= $(VENV)/bin/python
-PIP ?= $(VENV)/bin/pip
+COMPOSE := docker compose
 
-help:
-	@echo "Record Store Bot"
-	@echo ""
-	@echo "Targets:"
-	@echo "  install      Create venv and install dependencies"
-	@echo "  migrate      Run database migrations"
-	@echo "  bot          Run the Telegram bot"
-	@echo "  api          Run the webhook API"
-	@echo "  worker       Run the background worker"
-	@echo "  test         Run tests"
-	@echo "  docker-up    Start services with docker compose"
-	@echo "  docker-down  Stop services with docker compose"
+up: ## Start all services in the background
+	$(COMPOSE) up -d --build
 
-$(VENV)/bin/activate:
-	python -m venv $(VENV)
+rebuild: ## Rebuild images without cache and start services
+	$(COMPOSE) build --no-cache
+	$(COMPOSE) up -d
 
-install: $(VENV)/bin/activate
-	$(PIP) install -r requirements.txt
+down: ## Stop services
+	$(COMPOSE) down
 
-migrate:
-	$(PYTHON) -m db.migrate
+down-v: ## Stop services and remove volumes
+	$(COMPOSE) down -v
 
-bot:
-	$(PYTHON) run.py bot
+restart: down up ## Restart services
 
-api:
-	$(PYTHON) run.py api
+ps: ## Show service status
+	$(COMPOSE) ps
 
-worker:
-	$(PYTHON) run.py worker
+logs: ## Tail all service logs
+	$(COMPOSE) logs -f
 
-test:
-	$(PYTHON) -m pytest
+api-logs: ## Tail API logs
+	$(COMPOSE) logs -f api
 
-docker-up:
-	docker compose up --build
+worker-logs: ## Tail worker logs
+	$(COMPOSE) logs -f worker
 
-docker-down:
-	docker compose down
+redis-logs: ## Tail Redis logs
+	$(COMPOSE) logs -f redis
+
+bot-logs: ## Tail bot logs
+	$(COMPOSE) logs -f bot
+
+api-sh: ## Shell into API container
+	$(COMPOSE) exec api bash
+
+worker-sh: ## Shell into worker container
+	$(COMPOSE) exec worker bash
+
+bot-sh: ## Shell into bot container
+	$(COMPOSE) exec bot bash
+
+redis-cli: ## Open redis-cli
+	$(COMPOSE) exec redis redis-cli
+
+migrate: ## Run database migrations in API container
+	$(COMPOSE) run --rm --no-deps -e PYTHONPATH=/app --entrypoint bash api -lc 'python -m db.migrate'
+
+health: ## Check API health endpoint
+	curl -fsS http://localhost:$${WEBHOOK_PORT:-8080}/health >/dev/null && echo "OK" || (echo "FAILED"; exit 1)
+
+help: ## Show this help
+	@printf "\nTargets:\n\n"
+	@grep -E '^[a-zA-Z0-9_.-]+:|^## ' $(MAKEFILE_LIST) | \
+	awk 'BEGIN{FS=":|## "}{if($$0 ~ /:$$/){t=$$1}else if($$0 ~ /^## /){printf "  \033[36m%-18s\033[0m %s\n", t, $$2}}'
+
+.PHONY: up rebuild down down-v restart ps logs api-logs worker-logs redis-logs bot-logs \
+        api-sh worker-sh bot-sh redis-cli migrate health help
