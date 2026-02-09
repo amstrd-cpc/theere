@@ -70,14 +70,20 @@ def _discogs_keyboard(settings: dict, connected: bool) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                "Update Discogs Token" if connected else "Connect Discogs",
-                callback_data="integrations:discogs:connect",
+                f"Listings Sync: {_bool_label(settings.get('discogs_listings_enabled'))}",
+                callback_data="integrations:discogs:toggle:discogs_listings_enabled",
             )
         ],
         [
             InlineKeyboardButton(
-                "Listings Sync (coming soon)",
-                callback_data="integrations:discogs:coming_soon",
+                f"Three-way Sync: {_bool_label(settings.get('three_way_sync_enabled'))}",
+                callback_data="integrations:discogs:toggle:three_way_sync_enabled",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Update Discogs Token" if connected else "Connect Discogs",
+                callback_data="integrations:discogs:connect",
             )
         ],
     ]
@@ -103,7 +109,8 @@ def _format_discogs_status(store: dict, settings: dict) -> str:
         "💿 Discogs\n"
         f"Status: {'Connected' if connected else 'Not connected'}\n"
         f"• Collection Sync: {_bool_label(settings.get('discogs_collection_sync_enabled'))}\n"
-        "• Listings Sync: coming soon\n"
+        f"• Listings Sync: {_bool_label(settings.get('discogs_listings_enabled'))}\n"
+        f"• Three-way Sync: {_bool_label(settings.get('three_way_sync_enabled'))}\n"
     )
 
 
@@ -138,6 +145,21 @@ def _latest_sync_run(store_id: int, run_type: str) -> dict | None:
         cur = conn.execute(
             """
             SELECT * FROM sync_runs
+            WHERE store_id = ? AND run_type = ?
+            ORDER BY ts_started DESC
+            LIMIT 1
+            """,
+            (store_id, run_type),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _latest_tri_sync_run(store_id: int, run_type: str) -> dict | None:
+    with get_inventory_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM tri_sync_runs
             WHERE store_id = ? AND run_type = ?
             ORDER BY ts_started DESC
             LIMIT 1
@@ -184,13 +206,34 @@ async def sync_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     last_order_line = last_order["last_applied"] if last_order and last_order["last_applied"] else "never"
     webhook_received = webhook["last_received"] if webhook and webhook["last_received"] else "never"
     webhook_processed = webhook["last_processed"] if webhook and webhook["last_processed"] else "never"
+    tri_discogs = _latest_tri_sync_run(store_id, "discogs")
+    tri_woo = _latest_tri_sync_run(store_id, "woo")
     counts = (
         f"Pushed: {periodic.get('pushed_count', 0)}, "
         f"Pulled: {periodic.get('pulled_count', 0)}, "
         f"Created: {periodic.get('created_local_count', 0)}, "
-        f"Mapping fixed: {periodic.get('mapping_fixed_count', 0)}"
+        f"Mapping fixed: {periodic.get('mapping_fixed_count', 0)}, "
+        f"Incoming: {periodic.get('incoming_count', 0)}, "
+        f"Drifted: {periodic.get('drifted_count', 0)}, "
+        f"Conflicts: {periodic.get('conflict_count', 0)}"
         if periodic
         else "No periodic sync data yet."
+    )
+    tri_discogs_counts = (
+        f"Incoming: {tri_discogs.get('incoming_count', 0)}, "
+        f"Applied: {tri_discogs.get('applied_count', 0)}, "
+        f"Drifted: {tri_discogs.get('drifted_count', 0)}, "
+        f"Conflicts: {tri_discogs.get('conflict_count', 0)}"
+        if tri_discogs
+        else "no runs"
+    )
+    tri_woo_counts = (
+        f"Incoming: {tri_woo.get('incoming_count', 0)}, "
+        f"Applied: {tri_woo.get('applied_count', 0)}, "
+        f"Drifted: {tri_woo.get('drifted_count', 0)}, "
+        f"Conflicts: {tri_woo.get('conflict_count', 0)}"
+        if tri_woo
+        else "no runs"
     )
     last_error = periodic.get("last_error") if periodic and periodic.get("last_error") else "none"
     text = (
@@ -200,6 +243,8 @@ async def sync_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"• Last order processed: {last_order_line}\n"
         f"• Webhook last received: {webhook_received}\n"
         f"• Webhook last processed: {webhook_processed}\n"
+        f"• Three-way Discogs: {tri_discogs.get('ts_finished') if tri_discogs else 'never'} ({tri_discogs_counts})\n"
+        f"• Three-way Woo: {tri_woo.get('ts_finished') if tri_woo else 'never'} ({tri_woo_counts})\n"
         "• Queue length: 0\n"
         f"• Last periodic counts: {counts}\n"
         f"• Last error: {last_error}\n"
@@ -278,8 +323,6 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
             except BadRequest as exc:
                 if "Message is not modified" not in str(exc):
                     raise
-        elif action == "coming_soon":
-            await query.answer("Listings sync is coming soon.", show_alert=True)
         return
 
 

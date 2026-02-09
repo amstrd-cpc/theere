@@ -109,5 +109,16 @@ class DiscogsClient:
         response = self._request("POST", f"https://api.discogs.com{path}", json=payload)
         return response.json()
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type((requests.RequestException, DiscogsRateLimitError)),
+    )
+    def delete(self, path: str) -> Dict[str, Any]:
+        response = self._request("DELETE", f"https://api.discogs.com{path}")
+        if response.content:
+            return response.json()
+        return {}
+
     def get_identity(self) -> Dict[str, Any]:
         return self.get("/oauth/identity")

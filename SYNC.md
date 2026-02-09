@@ -1,6 +1,6 @@
 # Sync Overview
 
-This project uses a single synchronization engine (`SyncEngine`) to keep local inventory and WooCommerce in sync. Sync only touches **quantity** and **regular_price** (local field `price_gel`). Currency is GEL across systems.
+This project uses a sync engine (`SyncEngine`) plus optional three-way polling to keep local inventory, WooCommerce, and Discogs listings in sync. Sync touches **quantity** and **regular_price** (local field `price_gel`) by default, and can include other fields via incoming whitelists. Currency is GEL across systems.
 
 ## Instant vs Periodic
 
@@ -34,6 +34,43 @@ Alternative strategies can be selected in the WooCommerce integration screen:
 
 - **Woo wins** (always pull)
 - **Local wins** (always push)
+
+## Push-only vs bidirectional
+
+Incoming changes are blocked by default (push-only mode). Enable incoming changes per channel:
+
+- `woo_allow_incoming`
+- `discogs_allow_incoming`
+
+Incoming field whitelists control which fields are applied:
+
+- Woo: `quantity`, `price`, `description`, `images`
+- Discogs: `quantity`, `listing_price`, `condition`, `comments`
+
+Fields like internal IDs, SKUs, mappings, supplier info, and costs are never accepted.
+
+## Three-way sync (Woo + Discogs)
+
+When `three_way_sync_enabled` is on, the bot schedules two polling jobs:
+
+- Discogs listings: `three_way_discogs_interval_minutes`
+- Woo products: `three_way_woo_interval_minutes`
+
+Each run records:
+
+- **Incoming** changes detected
+- **Applied** changes written locally
+- **Drifted** changes ignored due to push-only mode/whitelists
+- **Conflicts** where both local + remote changed after `last_sync_at`
+
+Hard conflicts default to **local wins** while logging conflict counts for review.
+
+## Business events
+
+Business events always apply locally (even when incoming sync is disabled):
+
+- Woo paid/completed orders decrement stock and create sales records.
+- Discogs paid orders decrement stock based on listing mappings.
 
 ## Mapping and identity
 

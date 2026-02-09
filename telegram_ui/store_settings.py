@@ -53,16 +53,23 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Discogs price sync: {settings.get('discogs_price_sync')}\n"
         f"• Discogs polling: {settings.get('discogs_polling_enabled')}\n"
         f"• Discogs interval: {settings.get('discogs_polling_interval_minutes')} min\n"
+        f"• Discogs listings enabled: {settings.get('discogs_listings_enabled')}\n"
         f"• Three-way sync: {settings.get('three_way_sync_enabled')}\n"
         f"• 3-way Discogs interval: {settings.get('three_way_discogs_interval_minutes')} min\n"
         f"• 3-way Woo interval: {settings.get('three_way_woo_interval_minutes')} min\n"
+        f"• Woo incoming allowed: {settings.get('woo_allow_incoming')}\n"
+        f"• Discogs incoming allowed: {settings.get('discogs_allow_incoming')}\n"
+        f"• Woo incoming fields: {settings.get('woo_incoming_fields')}\n"
+        f"• Discogs incoming fields: {settings.get('discogs_incoming_fields')}\n"
+        f"• Bootstrap completed: {settings.get('bootstrap_completed')}\n"
         f"• Notification chat: {settings.get('notification_chat_id') or 'default'}\n"
         f"• Verify SSL: {settings.get('verify_ssl')}\n\n"
         "Update with: /settings auto_decrement on|off, /settings status <status>, "
         "/settings discogs on|off, /settings discogs_price on|off, "
-        "/settings discogs_poll on|off, /settings discogs_interval <minutes>, "
+        "/settings discogs_poll on|off, /settings discogs_interval <minutes>, /settings discogs_listings on|off, "
         "/settings three_way on|off, /settings three_way_discogs_interval <minutes>, "
-        "/settings three_way_woo_interval <minutes>, /settings notify <chat_id>"
+        "/settings three_way_woo_interval <minutes>, /settings woo_incoming on|off, "
+        "/settings discogs_incoming on|off, /settings notify <chat_id>"
     )
     await update.message.reply_text(text)
 
@@ -82,6 +89,8 @@ async def _apply_settings(update: Update, context: ContextTypes.DEFAULT_TYPE, st
         updates["discogs_price_sync"] = value.lower() in {"on", "true", "1", "yes"}
     elif key in {"discogs_poll", "discogs_polling"}:
         updates["discogs_polling_enabled"] = value.lower() in {"on", "true", "1", "yes"}
+    elif key in {"discogs_listings", "discogs_listings_enabled"}:
+        updates["discogs_listings_enabled"] = value.lower() in {"on", "true", "1", "yes"}
     elif key in {"discogs_interval", "discogs_polling_interval"}:
         try:
             updates["discogs_polling_interval_minutes"] = int(value)
@@ -102,6 +111,10 @@ async def _apply_settings(update: Update, context: ContextTypes.DEFAULT_TYPE, st
         except ValueError:
             await update.message.reply_text("Interval must be numeric minutes.")
             return
+    elif key in {"woo_incoming", "woo_allow_incoming"}:
+        updates["woo_allow_incoming"] = value.lower() in {"on", "true", "1", "yes"}
+    elif key in {"discogs_incoming", "discogs_allow_incoming"}:
+        updates["discogs_allow_incoming"] = value.lower() in {"on", "true", "1", "yes"}
     elif key in {"notify", "notification"}:
         try:
             updates["notification_chat_id"] = int(value) if value else None

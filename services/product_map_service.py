@@ -85,6 +85,16 @@ def find_mapping_by_variation_id(store_id: int, variation_id: int) -> Optional[D
         return dict(row) if row else None
 
 
+def find_mapping_by_discogs_listing_id(store_id: int, listing_id: int) -> Optional[Dict[str, Any]]:
+    with get_inventory_db() as conn:
+        cur = conn.execute(
+            "SELECT * FROM product_map WHERE store_id = ? AND discogs_listing_id = ?",
+            (store_id, listing_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def find_mapping_by_internal_id(store_id: int, internal_product_id: int) -> Optional[Dict[str, Any]]:
     with get_inventory_db() as conn:
         cur = conn.execute(

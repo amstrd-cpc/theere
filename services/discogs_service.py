@@ -55,9 +55,31 @@ def update_listing(store: Dict[str, Any], listing_id: int, payload: Dict[str, An
     return client.update(f"/marketplace/listings/{listing_id}", payload)
 
 
+def delete_listing(store: Dict[str, Any], listing_id: int) -> Dict[str, Any]:
+    client = _client(store)
+    return client.delete(f"/marketplace/listings/{listing_id}")
+
+
+def update_listing_status(store: Dict[str, Any], listing_id: int, status: str) -> Dict[str, Any]:
+    return update_listing(store, listing_id, {"status": status})
+
+
 def fetch_listing(store: Dict[str, Any], listing_id: int) -> Dict[str, Any]:
     client = _client(store)
     return client.get(f"/marketplace/listings/{listing_id}")
+
+
+def fetch_marketplace_orders(store: Dict[str, Any], *, status: Optional[str] = None, page: int = 1) -> Dict[str, Any]:
+    client = _client(store)
+    params: Dict[str, Any] = {"page": page, "per_page": 50}
+    if status:
+        params["status"] = status
+    return client.get("/marketplace/orders", params=params)
+
+
+def fetch_marketplace_order(store: Dict[str, Any], order_id: int) -> Dict[str, Any]:
+    client = _client(store)
+    return client.get(f"/marketplace/orders/{order_id}")
 
 
 def add_to_collection(store: Dict[str, Any], release_id: int, *, folder_id: int = 1) -> Dict[str, Any]:

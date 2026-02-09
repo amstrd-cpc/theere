@@ -9,14 +9,16 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from config.settings import load_settings
 from db import init_db
-from jobs.discogs_jobs import reconcile_discogs_inventory
+from jobs.discogs_jobs import poll_three_way_discogs, poll_three_way_woo, reconcile_discogs_inventory
 from jobs.woo_jobs import sync_inventory_to_woo
 from services.backup_service import run_backup
 from services.sync_engine import SyncEngine
 from services.runtime import run_blocking
-from services.store_service import get_default_store
+from services.store_service import get_default_store, get_store_settings, update_store_settings
+from services.inventory_service import inventory_is_empty
 from telegram_ui.add import orphan_supplier_callback, start_add_flow
 from telegram_ui.auth import check_auth_middleware, create_auth_handlers
+from telegram_ui.bootstrap import bootstrap_keyboard, create_bootstrap_handlers
 from telegram_ui.core import error_handler, help_command, recent_sales, start
 from telegram_ui.discogs import create_discogs_handlers
 from telegram_ui.inventory import create_inventory_conversation, low_stock, register_inventory_callbacks
@@ -58,6 +60,14 @@ async def discogs_reconcile_job(context: ContextTypes.DEFAULT_TYPE):
     await run_blocking(reconcile_discogs_inventory)
 
 
+async def three_way_discogs_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_blocking(poll_three_way_discogs)
+
+
+async def three_way_woo_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_blocking(poll_three_way_woo)
+
+
 async def rolling_backup_job(context: ContextTypes.DEFAULT_TYPE):
     await run_blocking(run_backup, "rolling")
 
@@ -66,12 +76,36 @@ async def daily_backup_job(context: ContextTypes.DEFAULT_TYPE):
     await run_blocking(run_backup, "daily")
 
 
+async def bootstrap_prompt_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = await run_blocking(get_default_store)
+    if not store:
+        return
+    store_id = int(store["id"])
+    settings = await run_blocking(get_store_settings, store_id)
+    if settings.get("bootstrap_completed"):
+        return
+    if not await run_blocking(inventory_is_empty):
+        await run_blocking(update_store_settings, store_id, {"bootstrap_completed": True})
+        return
+    chat_id = settings.get("notification_chat_id") or load_settings().admin_chat_id
+    if not chat_id:
+        logger.warning("Bootstrap needed but no admin chat_id configured.")
+        return
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="🧰 Inventory is empty. Choose a source to bootstrap:",
+        reply_markup=bootstrap_keyboard(),
+    )
+
+
 def main() -> None:
     init_db()
 
     application = Application.builder().token(settings.bot_token).job_queue(JobQueue()).build()
 
     if application.job_queue:
+        store = get_default_store()
+        settings_snapshot = get_store_settings(int(store["id"])) if store else {}
         application.job_queue.run_repeating(
             periodic_sync_job,
             interval=datetime.timedelta(minutes=5),
@@ -95,6 +129,24 @@ def main() -> None:
             interval=datetime.timedelta(days=1),
             first=datetime.timedelta(minutes=10),
             name="db-backup-daily",
+        )
+        if store and settings_snapshot.get("three_way_sync_enabled"):
+            application.job_queue.run_repeating(
+                three_way_discogs_job,
+                interval=datetime.timedelta(minutes=int(settings_snapshot.get("three_way_discogs_interval_minutes") or 15)),
+                first=datetime.timedelta(minutes=4),
+                name="three-way-discogs",
+            )
+            application.job_queue.run_repeating(
+                three_way_woo_job,
+                interval=datetime.timedelta(minutes=int(settings_snapshot.get("three_way_woo_interval_minutes") or 15)),
+                first=datetime.timedelta(minutes=5),
+                name="three-way-woo",
+            )
+        application.job_queue.run_once(
+            bootstrap_prompt_job,
+            when=datetime.timedelta(seconds=15),
+            name="bootstrap-prompt",
         )
     else:
         logger.warning("JobQueue unavailable; install python-telegram-bot[job-queue] to enable Woo polling.")
@@ -121,6 +173,8 @@ def main() -> None:
     for handler in create_discogs_handlers():
         application.add_handler(handler)
     for handler in create_integrations_handlers():
+        application.add_handler(handler)
+    for handler in create_bootstrap_handlers():
         application.add_handler(handler)
 
     application.add_handler(start_add_flow())
