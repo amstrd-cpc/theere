@@ -106,6 +106,10 @@ def main() -> None:
     if application.job_queue:
         store = get_default_store()
         settings_snapshot = get_store_settings(int(store["id"])) if store else {}
+        three_way_discogs_interval = int(
+            settings_snapshot.get("three_way_discogs_interval_minutes") or 15
+        )
+        three_way_woo_interval = int(settings_snapshot.get("three_way_woo_interval_minutes") or 15)
         application.job_queue.run_repeating(
             periodic_sync_job,
             interval=datetime.timedelta(minutes=5),
@@ -130,19 +134,18 @@ def main() -> None:
             first=datetime.timedelta(minutes=10),
             name="db-backup-daily",
         )
-        if store and settings_snapshot.get("three_way_sync_enabled"):
-            application.job_queue.run_repeating(
-                three_way_discogs_job,
-                interval=datetime.timedelta(minutes=int(settings_snapshot.get("three_way_discogs_interval_minutes") or 15)),
-                first=datetime.timedelta(minutes=4),
-                name="three-way-discogs",
-            )
-            application.job_queue.run_repeating(
-                three_way_woo_job,
-                interval=datetime.timedelta(minutes=int(settings_snapshot.get("three_way_woo_interval_minutes") or 15)),
-                first=datetime.timedelta(minutes=5),
-                name="three-way-woo",
-            )
+        application.job_queue.run_repeating(
+            three_way_discogs_job,
+            interval=datetime.timedelta(minutes=three_way_discogs_interval),
+            first=datetime.timedelta(minutes=4),
+            name="three-way-discogs",
+        )
+        application.job_queue.run_repeating(
+            three_way_woo_job,
+            interval=datetime.timedelta(minutes=three_way_woo_interval),
+            first=datetime.timedelta(minutes=5),
+            name="three-way-woo",
+        )
         application.job_queue.run_once(
             bootstrap_prompt_job,
             when=datetime.timedelta(seconds=15),

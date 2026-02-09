@@ -278,22 +278,25 @@ def poll_discogs_listings(store_id: int) -> None:
                 last_sync_direction=last_sync_direction,
                 last_sync_hash=last_sync_hash,
             ) or hard_conflict:
+                push_success = False
                 try:
                     update_listing_quantity(store, int(listing_id), local_qty)
                     if sync_price:
                         update_listing(store, int(listing_id), {"price": f"{local_price:.2f}"})
+                    push_success = True
                 except Exception:
                     logger.exception("Failed updating Discogs listing %s", listing_id)
                     errors_count += 1
-                update_product_map_fields(
-                    store_id,
-                    int(internal_id),
-                    {
-                        "last_sync_direction": "to_discogs",
-                        "last_sync_hash": local_hash,
-                        "last_sync_at": datetime.datetime.utcnow().isoformat(),
-                    },
-                )
+                if push_success:
+                    update_product_map_fields(
+                        store_id,
+                        int(internal_id),
+                        {
+                            "last_sync_direction": "to_discogs",
+                            "last_sync_hash": local_hash,
+                            "last_sync_at": datetime.datetime.utcnow().isoformat(),
+                        },
+                    )
 
             update_product_map_fields(
                 store_id,
@@ -426,21 +429,24 @@ def poll_woo_products(store_id: int) -> None:
                 last_sync_direction=last_sync_direction,
                 last_sync_hash=last_sync_hash,
             ) or hard_conflict:
+                push_success = False
                 try:
                     update_stock(int(product_id), local_qty, store=store)
                     update_product_by_id(int(product_id), {"regular_price": f"{local_price:.2f}"}, store=store)
+                    push_success = True
                 except Exception:
                     logger.exception("Failed updating Woo product %s", product_id)
                     errors_count += 1
-                update_product_map_fields(
-                    store_id,
-                    int(internal_id),
-                    {
-                        "last_sync_direction": "to_woo",
-                        "last_sync_hash": local_hash,
-                        "last_sync_at": datetime.datetime.utcnow().isoformat(),
-                    },
-                )
+                if push_success:
+                    update_product_map_fields(
+                        store_id,
+                        int(internal_id),
+                        {
+                            "last_sync_direction": "to_woo",
+                            "last_sync_hash": local_hash,
+                            "last_sync_at": datetime.datetime.utcnow().isoformat(),
+                        },
+                    )
 
             update_product_map_fields(
                 store_id,
