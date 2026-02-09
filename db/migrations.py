@@ -47,7 +47,7 @@ SALES_COLUMNS = {
 }
 
 
-LATEST_VERSION = 5
+LATEST_VERSION = 6
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -405,6 +405,9 @@ def _create_woo_tables(conn: sqlite3.Connection) -> None:
             pushed_count INTEGER DEFAULT 0,
             created_local_count INTEGER DEFAULT 0,
             mapping_fixed_count INTEGER DEFAULT 0,
+            incoming_count INTEGER DEFAULT 0,
+            drifted_count INTEGER DEFAULT 0,
+            conflict_count INTEGER DEFAULT 0,
             errors_count INTEGER DEFAULT 0,
             last_error TEXT
         )
@@ -432,6 +435,32 @@ def _create_woo_tables(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             path TEXT,
             error TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tri_sync_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_started TEXT NOT NULL,
+            ts_finished TEXT,
+            store_id INTEGER NOT NULL,
+            run_type TEXT CHECK(run_type IN ('discogs', 'woo')) NOT NULL,
+            incoming_count INTEGER DEFAULT 0,
+            applied_count INTEGER DEFAULT 0,
+            drifted_count INTEGER DEFAULT 0,
+            conflict_count INTEGER DEFAULT 0,
+            errors_count INTEGER DEFAULT 0,
+            last_error TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS discogs_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER UNIQUE,
+            processed_at TEXT
         )
         """
     )
@@ -524,6 +553,19 @@ def migrate() -> None:
             _create_woo_tables(conn)
             _set_version(conn, 5)
             current_version = 5
+        if current_version < 6:
+            _add_missing_columns(
+                conn,
+                "sync_runs",
+                {
+                    "incoming_count": "INTEGER DEFAULT 0",
+                    "drifted_count": "INTEGER DEFAULT 0",
+                    "conflict_count": "INTEGER DEFAULT 0",
+                },
+            )
+            _create_woo_tables(conn)
+            _set_version(conn, 6)
+            current_version = 6
         conn.commit()
 
     with get_sales_db() as conn:

@@ -258,6 +258,27 @@ def get_inventory_page(page: int, page_size: int = 8) -> Tuple[List[Dict[str, An
         return items, total
 
 
+def inventory_is_empty() -> bool:
+    with get_inventory_db() as conn:
+        cur = conn.execute("SELECT 1 FROM inventory LIMIT 1")
+        return cur.fetchone() is None
+
+
+def find_inventory_by_discogs_release_id(release_id: int) -> Optional[Dict[str, Any]]:
+    with get_inventory_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT inventory.*, supplier.name AS supplier_name
+            FROM inventory
+            LEFT JOIN supplier ON supplier.id = inventory.supplier_id
+            WHERE inventory.discogs_release_id = ?
+            """,
+            (int(release_id),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def search_inventory(query: str, limit: int = 15) -> List[Dict[str, Any]]:
     with get_inventory_db() as conn:
         cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='inventory_fts'")

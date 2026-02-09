@@ -6,7 +6,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from services.channel_sync_service import reconcile_channel_stock, sync_inventory_item
-from services.discogs_sync_service import sync_all_discogs
+from services.discogs_sync_service import (
+    relist_listing,
+    remove_listing,
+    sync_all_discogs,
+    unlist_listing,
+    update_listing_from_item,
+)
 from services.discogs_service import DiscogsNotConfigured, add_to_collection, create_listing, fetch_listing, get_identity
 from services.inventory_service import get_inventory_by_id, search_inventory, update_inventory_fields
 from services.product_map_service import clear_discogs_listing, find_mapping_by_internal_id, upsert_product_map
@@ -27,6 +33,10 @@ DISCogs_ACTIONS = {
     "collect_discogs_bulk": "Add selected to Discogs collection",
     "link_discogs": "Link Discogs listing",
     "unlink_discogs": "Unlink Discogs listing",
+    "update_discogs_listing": "Update Discogs listing",
+    "unlist_discogs": "Unlist Discogs listing",
+    "relist_discogs": "Relist Discogs listing",
+    "remove_discogs_listing": "Delete Discogs listing",
     "reconcile_discogs": "Reconcile Discogs",
     "reconcile_woo": "Reconcile Woo",
     "discogs_refresh": "Refresh Discogs quantity",
@@ -40,7 +50,10 @@ def _listings_enabled(store_id: int) -> bool:
 
 
 async def _reject_listings_disabled(target) -> None:
-    await target.reply_text("🚧 Discogs listings sync is coming soon. Collection sync is available now.")
+    await target.reply_text(
+        "⚠️ Discogs listings sync is OFF. You can still run one-off listing actions, "
+        "but background listing sync is disabled."
+    )
 
 
 def _discogs_payload(item: dict, *, price: float, condition: str, sleeve_condition: str) -> dict:
@@ -261,7 +274,6 @@ async def publish_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not _listings_enabled(int(store["id"])):
         await _reject_listings_disabled(update.message)
-        return ConversationHandler.END
     await update.message.reply_text("Tell me the artist or album name to publish on Discogs:")
     context.user_data["discogs_action"] = "publish_discogs"
     return SEARCHING
@@ -276,7 +288,6 @@ async def publish_discogs_all(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     if not _listings_enabled(int(store["id"])):
         await _reject_listings_disabled(update.message)
-        return ConversationHandler.END
     await update.message.reply_text("Tell me the artist or album name to publish ALL matches on Discogs:")
     context.user_data["discogs_action"] = "publish_discogs_all"
     return SEARCHING
@@ -291,7 +302,6 @@ async def publish_discogs_selection(update: Update, context: ContextTypes.DEFAUL
         return
     if not _listings_enabled(int(store["id"])):
         await _reject_listings_disabled(update.message)
-        return ConversationHandler.END
     await update.message.reply_text("Tell me the artist or album name to select items for Discogs publishing:")
     context.user_data["discogs_action"] = "publish_discogs_selection"
     return SEARCHING
@@ -330,6 +340,62 @@ async def link_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("Tell me the artist or album name you want to link to a Discogs listing:")
     context.user_data["discogs_action"] = "link_discogs"
+    return SEARCHING
+
+
+@require_auth
+@require_admin
+async def update_discogs_listing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store = get_default_store()
+    if not store:
+        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        return
+    if not _listings_enabled(int(store["id"])):
+        await _reject_listings_disabled(update.message)
+    await update.message.reply_text("Tell me the artist or album name to update Discogs listing:")
+    context.user_data["discogs_action"] = "update_discogs_listing"
+    return SEARCHING
+
+
+@require_auth
+@require_admin
+async def unlist_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store = get_default_store()
+    if not store:
+        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        return
+    if not _listings_enabled(int(store["id"])):
+        await _reject_listings_disabled(update.message)
+    await update.message.reply_text("Tell me the artist or album name to unlist from Discogs:")
+    context.user_data["discogs_action"] = "unlist_discogs"
+    return SEARCHING
+
+
+@require_auth
+@require_admin
+async def relist_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store = get_default_store()
+    if not store:
+        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        return
+    if not _listings_enabled(int(store["id"])):
+        await _reject_listings_disabled(update.message)
+    await update.message.reply_text("Tell me the artist or album name to relist on Discogs:")
+    context.user_data["discogs_action"] = "relist_discogs"
+    return SEARCHING
+
+
+@require_auth
+@require_admin
+async def remove_discogs_listing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    store = get_default_store()
+    if not store:
+        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        return
+    if not _listings_enabled(int(store["id"])):
+        await _reject_listings_disabled(update.message)
+    await update.message.reply_text("Tell me the artist or album name to delete Discogs listing:")
+    context.user_data["discogs_action"] = "remove_discogs_listing"
     return SEARCHING
 
 
@@ -724,6 +790,51 @@ async def handle_discogs_confirm(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("✅ Discogs listing mapping removed.")
         return ConversationHandler.END
 
+    if action == "update_discogs_listing":
+        item = await run_blocking(get_inventory_by_id, int(item_id))
+        if not item:
+            await query.edit_message_text("Item not found.")
+            return ConversationHandler.END
+        mapping = find_mapping_by_internal_id(int(store["id"]), int(item_id))
+        if not mapping or not mapping.get("discogs_listing_id"):
+            await query.edit_message_text("No Discogs listing mapping for this item.")
+            return ConversationHandler.END
+        listing_id = int(mapping["discogs_listing_id"])
+        update_listing_from_item(store, listing_id, item)
+        await query.edit_message_text(f"✅ Discogs listing {listing_id} updated.")
+        return ConversationHandler.END
+
+    if action == "unlist_discogs":
+        mapping = find_mapping_by_internal_id(int(store["id"]), int(item_id))
+        if not mapping or not mapping.get("discogs_listing_id"):
+            await query.edit_message_text("No Discogs listing mapping for this item.")
+            return ConversationHandler.END
+        listing_id = int(mapping["discogs_listing_id"])
+        unlist_listing(store, listing_id)
+        await query.edit_message_text(f"✅ Discogs listing {listing_id} unlisted.")
+        return ConversationHandler.END
+
+    if action == "relist_discogs":
+        mapping = find_mapping_by_internal_id(int(store["id"]), int(item_id))
+        if not mapping or not mapping.get("discogs_listing_id"):
+            await query.edit_message_text("No Discogs listing mapping for this item.")
+            return ConversationHandler.END
+        listing_id = int(mapping["discogs_listing_id"])
+        relist_listing(store, listing_id)
+        await query.edit_message_text(f"✅ Discogs listing {listing_id} relisted.")
+        return ConversationHandler.END
+
+    if action == "remove_discogs_listing":
+        mapping = find_mapping_by_internal_id(int(store["id"]), int(item_id))
+        if not mapping or not mapping.get("discogs_listing_id"):
+            await query.edit_message_text("No Discogs listing mapping for this item.")
+            return ConversationHandler.END
+        listing_id = int(mapping["discogs_listing_id"])
+        remove_listing(store, listing_id)
+        clear_discogs_listing(int(store["id"]), int(item_id))
+        await query.edit_message_text(f"✅ Discogs listing {listing_id} deleted.")
+        return ConversationHandler.END
+
     if action == "reconcile_discogs":
         item = await run_blocking(get_inventory_by_id, int(item_id))
         if not item:
@@ -931,6 +1042,10 @@ def create_discogs_handlers() -> list:
             CommandHandler("collect_discogs_selection", collect_discogs_selection),
             CommandHandler("link_discogs", link_discogs),
             CommandHandler("unlink_discogs", unlink_discogs),
+            CommandHandler("update_discogs_listing", update_discogs_listing),
+            CommandHandler("unlist_discogs", unlist_discogs),
+            CommandHandler("relist_discogs", relist_discogs),
+            CommandHandler("remove_discogs_listing", remove_discogs_listing),
             CommandHandler("reconcile_discogs", reconcile_discogs),
             CommandHandler("reconcile_woo", reconcile_woo),
             CommandHandler("discogs_refresh", discogs_refresh),

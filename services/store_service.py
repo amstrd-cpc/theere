@@ -23,6 +23,11 @@ DEFAULT_SETTINGS = {
     "three_way_sync_enabled": False,
     "three_way_discogs_interval_minutes": 15,
     "three_way_woo_interval_minutes": 15,
+    "bootstrap_completed": False,
+    "woo_allow_incoming": False,
+    "discogs_allow_incoming": False,
+    "woo_incoming_fields": ["quantity", "price", "description", "images"],
+    "discogs_incoming_fields": ["quantity", "listing_price", "condition", "comments"],
     "notification_chat_id": None,
     "verify_ssl": True,
 }

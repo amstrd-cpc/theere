@@ -21,6 +21,7 @@ from services.product_map_service import (
     upsert_product_map,
 )
 from services.store_service import get_store, get_store_settings
+from services.sync_policy import NEVER_ACCEPT_FIELDS, normalize_incoming_fields
 from services.woo_service import (
     compute_sync_hash,
     fetch_orders,
@@ -98,12 +99,20 @@ class SyncEngine:
             count += 1
         return count
 
-    def reconcile_catalog(self, store_id: int, *, sync_run_id: Optional[int] = None) -> Dict[str, int]:
+    def reconcile_catalog(
+        self,
+        store_id: int,
+        *,
+        sync_run_id: Optional[int] = None,
+        initial_load: bool = False,
+    ) -> Dict[str, int]:
         store = get_store(store_id)
         if not store or not is_configured(store_id):
             return self._empty_results()
         settings = get_store_settings(store_id)
         strategy = (settings.get("woo_sync_strategy") or "lww").lower()
+        allow_incoming = bool(settings.get("woo_allow_incoming") or initial_load)
+        incoming_fields = normalize_incoming_fields(settings.get("woo_incoming_fields") or [])
 
         results = self._empty_results()
         page = 1
@@ -113,7 +122,14 @@ class SyncEngine:
             if not products:
                 break
             for product in products:
-                item_results = self._reconcile_product(store_id, product, strategy=strategy, sync_run_id=sync_run_id)
+                item_results = self._reconcile_product(
+                    store_id,
+                    product,
+                    strategy=strategy,
+                    sync_run_id=sync_run_id,
+                    allow_incoming=allow_incoming,
+                    incoming_fields=incoming_fields,
+                )
                 for key, value in item_results.items():
                     results[key] += value
             if len(products) < per_page:
@@ -129,6 +145,8 @@ class SyncEngine:
         *,
         strategy: str,
         sync_run_id: Optional[int],
+        allow_incoming: bool,
+        incoming_fields: set[str],
     ) -> Dict[str, int]:
         results = self._empty_results()
         woo_id = product.get("id")
@@ -180,11 +198,21 @@ class SyncEngine:
             woo_snapshot = self._woo_snapshot(product)
             decision = self._decide_sync(local_snapshot, woo_snapshot, strategy=strategy)
             if decision == "pull":
+                results["incoming_count"] += 1
+                if not allow_incoming:
+                    results["drifted_count"] += 1
+                    logger.info("Woo incoming change drifted (incoming disabled) for item %s", theere_id)
+                    return results
                 if not self._local_rev_matches(int(theere_id), local_snapshot["local_rev"]):
+                    return results
+                updates = self._filter_incoming_updates(woo_snapshot, incoming_fields)
+                if not updates:
+                    results["drifted_count"] += 1
+                    logger.info("Woo incoming change ignored (no allowed fields) for item %s", theere_id)
                     return results
                 update_inventory_fields(
                     int(theere_id),
-                    {"quantity": woo_snapshot["quantity"], "price_gel": woo_snapshot["price_gel"]},
+                    updates,
                     sync_channels=False,
                     source="sync_pull" if strategy == "lww" else "manual_woo",
                     store_id=store_id,
@@ -347,6 +375,9 @@ class SyncEngine:
         pushed_count: int = 0,
         created_local_count: int = 0,
         mapping_fixed_count: int = 0,
+        incoming_count: int = 0,
+        drifted_count: int = 0,
+        conflict_count: int = 0,
         errors_count: int = 0,
         last_error: Optional[str] = None,
     ) -> None:
@@ -360,6 +391,9 @@ class SyncEngine:
                     pushed_count = ?,
                     created_local_count = ?,
                     mapping_fixed_count = ?,
+                    incoming_count = ?,
+                    drifted_count = ?,
+                    conflict_count = ?,
                     errors_count = ?,
                     last_error = ?
                 WHERE id = ?
@@ -370,6 +404,9 @@ class SyncEngine:
                     pushed_count,
                     created_local_count,
                     mapping_fixed_count,
+                    incoming_count,
+                    drifted_count,
+                    conflict_count,
                     errors_count,
                     last_error,
                     run_id,
@@ -396,6 +433,8 @@ class SyncEngine:
             "quantity": quantity,
             "price_gel": price,
             "modified_at": self._parse_woo_modified(product),
+            "description": product.get("description"),
+            "images": product.get("images"),
         }
 
     def _decide_sync(self, local: Dict[str, Any], woo: Dict[str, Any], *, strategy: str) -> str:
@@ -528,5 +567,22 @@ class SyncEngine:
             "pushed_count": 0,
             "created_local_count": 0,
             "mapping_fixed_count": 0,
+            "incoming_count": 0,
+            "drifted_count": 0,
+            "conflict_count": 0,
             "errors_count": 0,
         }
+
+    def _filter_incoming_updates(self, woo_snapshot: Dict[str, Any], allowed_fields: set[str]) -> Dict[str, Any]:
+        updates: Dict[str, Any] = {}
+        if "quantity" in allowed_fields and "quantity" not in NEVER_ACCEPT_FIELDS:
+            updates["quantity"] = woo_snapshot["quantity"]
+        if "price" in allowed_fields and "price" not in NEVER_ACCEPT_FIELDS:
+            updates["price_gel"] = woo_snapshot["price_gel"]
+        if "description" in allowed_fields and "description" not in NEVER_ACCEPT_FIELDS:
+            updates["description"] = woo_snapshot.get("description")
+        if "images" in allowed_fields and "images" not in NEVER_ACCEPT_FIELDS:
+            image = (woo_snapshot.get("images") or [{}])[0].get("src") if woo_snapshot.get("images") else None
+            if image:
+                updates["cover_url"] = image
+        return updates

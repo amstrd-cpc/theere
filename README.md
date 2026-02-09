@@ -9,7 +9,7 @@ Production-ready record store management bot for inventory, sales logging, Disco
 - Sales logging + Excel reports
 - WooCommerce webhooks (FastAPI) with queue-backed processing
 - Telegram-based order management (Woo-style status transitions)
-- Discogs listing management and three-way sync (Local → Woo → Discogs)
+- Discogs listing management and three-way sync (Local ↔ Woo ↔ Discogs)
 - Auth-protected bot commands
 
 ## Requirements
@@ -76,6 +76,12 @@ Woo sends a `X-WC-Webhook-Signature` header. The API validates it with the per-s
 3. Webhook secrets and IDs are stored in the DB
 4. Use `/settings` to control auto-decrement status and notifications
 
+### Bootstrap (empty database)
+If the local inventory is empty on startup, the bot sends a bootstrap prompt in Telegram. Choose:
+- **WooCommerce** to import the catalog with `SyncEngine.reconcile_catalog(initial_load=True)`
+- **Discogs** to import your collection releases into local inventory
+- **Merge** to run both
+
 ## Order Management
 Use `/orders` in Telegram to list recent orders and move between Woo statuses (pending → processing → completed, etc.). The bot updates WooCommerce as the source of truth.
 
@@ -83,6 +89,7 @@ Use `/orders` in Telegram to list recent orders and move between Woo statuses (p
 1. Run `/connect_discogs` in Telegram and paste your personal access token.
 2. Use `/discogs_status` to verify the connection.
 3. Publish or link listings with `/publish_discogs` and `/link_discogs`.
+4. Manage listings with `/update_discogs_listing`, `/unlist_discogs`, `/relist_discogs`, and `/remove_discogs_listing`.
 
 ## Mapping Strategy
 - Best: Woo product meta `theere_id=<internal_id>`
@@ -94,15 +101,34 @@ Use `/map_woo <woo_product_id> <internal_id> [sku]` to add mappings.
 Use `/link_discogs <listing_id> <internal_id>` to link Discogs listings.
 
 ## Sync Model (Local → Woo → Discogs)
-- **Local inventory is the source of truth** for quantity and identity.
-- Woo and Discogs are treated as channels and reconciled to Local.
+- **Local inventory is the source of truth** for quantity and identity by default.
+- Woo and Discogs are treated as channels and reconciled to Local unless incoming changes are explicitly allowed.
 - Use `/reconcile_woo` and `/reconcile_discogs` to force a drift repair.
 - Discogs polling (optional) uses the configured interval in `/settings`.
+Three-way sync focuses on quantity + price (local field `price_gel`) unless extended by incoming field whitelists.
+
+### Three-way sync
+Enable three-way sync in **Integrations → Discogs** to poll both Woo and Discogs listings on configurable intervals.
+Three-way sync tracks quantity + price and records applied, drifted, and conflict counts in sync status.
+
+### Push-only vs bidirectional
+- **Push-only (default):** Incoming changes are *ignored* (drifted) unless you enable incoming for that channel.
+- **Bidirectional:** Enable `woo_allow_incoming` / `discogs_allow_incoming` and adjust incoming field whitelists.
+
+Default incoming field whitelists:
+- Woo: `quantity`, `price`, `description`, `images`
+- Discogs: `quantity`, `listing_price`, `condition`, `comments`
+
+Fields like internal IDs, SKUs, mappings, supplier info, and costs are never accepted from remote sources.
+
+### Business events
+Order events always apply locally:
+- Woo paid/completed orders decrement stock and create sales entries.
+- Discogs paid orders decrement stock even if incoming sync is disabled.
 
 ## Conflict Rules
-- If Woo stock differs from Local, Local wins and `/reconcile_woo` re-applies Local quantities.
-- If Discogs listing quantity differs from Local, Local wins and `/reconcile_discogs` re-applies Local quantities.
-- Discogs sales outside the system are not auto-ingested (MVP); use `/discogs_refresh` to view a listing and reconcile if needed.
+- If both Local and a remote channel changed after the last sync, a **hard conflict** is logged.
+- Default behavior is **local wins** (local pushes overwrite remote), but conflicts are counted for review.
 
 ## Health Check
 - `GET /health` returns queue length
