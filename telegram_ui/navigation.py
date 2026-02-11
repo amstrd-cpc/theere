@@ -1,27 +1,53 @@
 from __future__ import annotations
 
+import datetime
+import json
+
 from telegram import Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from config.settings import load_settings
 from services.runtime import run_blocking
-from services.store_service import get_default_store, get_store_settings
+from services.store_service import get_default_store
 from telegram_ui.callback_contract import NavigationCallback, parse_navigation_callback
 from telegram_ui.menu_registry import ROOT_MENU_ID, get_menu_definition
 
 
 async def _is_navigation_router_enabled() -> bool:
     global_default = load_settings().nav_router_enabled
+    if not global_default:
+        return False
+
     store = await run_blocking(get_default_store)
     if not store:
-        return global_default
-    store_settings = await run_blocking(get_store_settings, int(store["id"]))
-    return bool(store_settings.get("nav_router_enabled", global_default))
+        return True
+
+    raw_settings = store.get("settings_json")
+    if not raw_settings:
+        return True
+
+    try:
+        parsed_settings = json.loads(raw_settings)
+    except (TypeError, json.JSONDecodeError):
+        return True
+
+    if "nav_router_enabled" not in parsed_settings:
+        return True
+
+    return bool(parsed_settings.get("nav_router_enabled"))
 
 
 def _build_command_update_from_callback(update: Update, command: str, bot) -> Update:
     query = update.callback_query
     message = query.message.to_dict() if query and query.message else {}
+    if query and query.from_user:
+        message["from"] = query.from_user.to_dict()
+
+    if query and query.message and query.message.chat:
+        message["chat"] = query.message.chat.to_dict()
+
+    message.setdefault("message_id", query.message.message_id if query and query.message else 0)
+    message["date"] = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     message["text"] = command
     message["entities"] = [{"type": "bot_command", "offset": 0, "length": len(command)}]
     payload = {"update_id": update.update_id, "message": message}
