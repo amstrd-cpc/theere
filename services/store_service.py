@@ -30,6 +30,7 @@ DEFAULT_SETTINGS = {
     "discogs_incoming_fields": ["quantity", "listing_price", "condition", "comments"],
     "notification_chat_id": None,
     "verify_ssl": True,
+    "nav_router_enabled": False,
 }
 
 

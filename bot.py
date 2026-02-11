@@ -24,6 +24,7 @@ from telegram_ui.discogs import create_discogs_handlers
 from telegram_ui.inventory import create_inventory_conversation, low_stock, register_inventory_callbacks
 from telegram_ui.integrations import create_integrations_handlers
 from telegram_ui.menu import create_menu_handler
+from telegram_ui.navigation import create_navigation_callback_handler
 from telegram_ui.orders import create_orders_callback_handler, create_orders_handler
 from telegram_ui.product_mapping import create_auto_map_handler, create_map_handler
 from telegram_ui.reports import daily_report, monthly_report, report_handler, weekly_report
@@ -182,6 +183,7 @@ def main() -> None:
 
     application.add_handler(start_add_flow())
     application.add_handler(CallbackQueryHandler(orphan_supplier_callback, pattern=r"^add:supplier:"), group=1)
+    application.add_handler(create_navigation_callback_handler())
     application.add_handler(start_sell_flow())
     application.add_handler(create_inventory_conversation())
     register_inventory_callbacks(application)
