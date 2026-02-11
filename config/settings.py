@@ -24,6 +24,7 @@ class Settings:
     api_base_url: Optional[str]
     webhook_port: int
     default_store_id: Optional[int]
+    nav_router_enabled: bool
 
 
 def _parse_int_list(raw: Optional[str]) -> List[int]:
@@ -71,6 +72,7 @@ def load_settings() -> Settings:
     api_base_url = os.getenv("API_BASE_URL")
     webhook_port = int(os.getenv("WEBHOOK_PORT", "8080"))
     default_store_id = _parse_optional_int(os.getenv("DEFAULT_STORE_ID"))
+    nav_router_enabled = os.getenv("NAV_ROUTER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
     return Settings(
         bot_token=bot_token,
@@ -85,6 +87,7 @@ def load_settings() -> Settings:
         api_base_url=api_base_url,
         webhook_port=webhook_port,
         default_store_id=default_store_id,
+        nav_router_enabled=nav_router_enabled,
     )
 
 
@@ -97,6 +100,7 @@ def health_check(settings: Settings) -> str:
     lines.append(f"API_BASE_URL: {settings.api_base_url or 'not set'}")
     lines.append(f"WEBHOOK_PORT: {settings.webhook_port}")
     lines.append(f"DEFAULT_STORE_ID: {settings.default_store_id or 'not set'}")
+    lines.append(f"NAV_ROUTER_ENABLED: {settings.nav_router_enabled}")
     lines.append(f"DB_PATH: {settings.db_path}")
     lines.append(f"SALES_DB_PATH: {settings.sales_db_path or settings.db_path}")
     return "\n".join(lines)

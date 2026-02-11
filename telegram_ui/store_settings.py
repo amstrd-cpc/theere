@@ -63,13 +63,14 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Discogs incoming fields: {settings.get('discogs_incoming_fields')}\n"
         f"• Bootstrap completed: {settings.get('bootstrap_completed')}\n"
         f"• Notification chat: {settings.get('notification_chat_id') or 'default'}\n"
-        f"• Verify SSL: {settings.get('verify_ssl')}\n\n"
+        f"• Verify SSL: {settings.get('verify_ssl')}\n"
+        f"• Nav router enabled: {settings.get('nav_router_enabled')}\n\n"
         "Update with: /settings auto_decrement on|off, /settings status <status>, "
         "/settings discogs on|off, /settings discogs_price on|off, "
         "/settings discogs_poll on|off, /settings discogs_interval <minutes>, /settings discogs_listings on|off, "
         "/settings three_way on|off, /settings three_way_discogs_interval <minutes>, "
         "/settings three_way_woo_interval <minutes>, /settings woo_incoming on|off, "
-        "/settings discogs_incoming on|off, /settings notify <chat_id>"
+        "/settings discogs_incoming on|off, /settings nav_router on|off, /settings notify <chat_id>"
     )
     await update.message.reply_text(text)
 
@@ -115,6 +116,8 @@ async def _apply_settings(update: Update, context: ContextTypes.DEFAULT_TYPE, st
         updates["woo_allow_incoming"] = value.lower() in {"on", "true", "1", "yes"}
     elif key in {"discogs_incoming", "discogs_allow_incoming"}:
         updates["discogs_allow_incoming"] = value.lower() in {"on", "true", "1", "yes"}
+    elif key in {"nav_router", "navigation_router", "new_menu_router"}:
+        updates["nav_router_enabled"] = value.lower() in {"on", "true", "1", "yes"}
     elif key in {"notify", "notification"}:
         try:
             updates["notification_chat_id"] = int(value) if value else None
