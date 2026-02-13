@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict
 
 import requests
@@ -24,6 +23,7 @@ from services.inventory_service import (
 from services.product_map_service import find_mapping_by_internal_id, upsert_product_map
 from services.runtime import run_blocking
 from services.sync_engine import SyncEngine
+from services.ui_session_service import create_callback_session, validate_callback_session
 from services.tri_sync_service import poll_discogs_listings, poll_woo_products
 from services.woo_service import (
     WooNotConfigured,
@@ -52,7 +52,6 @@ logger = logging.getLogger(__name__)
     CONFIRM,
 ) = range(14)
 CONDITION_OPTIONS = ["m", "nm", "vg+", "vg", "g+", "g", "f", "p"]
-ADD_SESSION_TTL = timedelta(minutes=30)
 
 
 def _format_release_button(item: Dict[str, Any]) -> str:
@@ -88,12 +87,12 @@ def _fetch_usd_to_gel() -> float:
     return 1.0
 
 
-def _start_add_session(context: ContextTypes.DEFAULT_TYPE) -> str:
-    session_id = uuid.uuid4().hex[:8]
-    context.user_data["add_session_id"] = session_id
-    context.user_data["add_session_started_at"] = datetime.utcnow()
-    logger.info("Started /add session %s", session_id)
-    return session_id
+def _start_add_session(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
+    session = create_callback_session(user_id=user_id, expected_node="add", expected_state="add_flow")
+    token = str(session["session_token"])
+    context.user_data["add_session_token"] = token
+    logger.info("Started /add session %s", session["session_id"])
+    return token
 
 
 async def _ack_callback(update: Update) -> None:
@@ -118,24 +117,20 @@ async def _validate_add_session(update: Update, context: ContextTypes.DEFAULT_TY
     if not update.callback_query:
         return True
     parsed = _parse_add_callback(update.callback_query.data)
-    if not parsed:
-        logger.warning("Missing add session data in callback: %s", update.callback_query.data)
+    token = parsed[1] if parsed else None
+    user_id = update.callback_query.from_user.id if update.callback_query.from_user else 0
+    ok, reason = await run_blocking(
+        validate_callback_session,
+        session_token=token,
+        user_id=user_id,
+        expected_node="add",
+        expected_state="add_flow",
+    )
+    if not ok:
+        correlation_id = f"cbq:{update.callback_query.id}" if update.callback_query.id else f"upd:{update.update_id}"
+        logger.info("Rejected add callback reason=%s menu=add correlation_id=%s", reason, correlation_id)
         await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
         return False
-    _, callback_session, _ = parsed
-    stored_session = context.user_data.get("add_session_id")
-    started_at = context.user_data.get("add_session_started_at")
-    expired = not isinstance(started_at, datetime) or datetime.utcnow() - started_at > ADD_SESSION_TTL
-    if callback_session != stored_session or expired:
-        logger.info(
-            "Add session invalid (callback=%s stored=%s expired=%s)",
-            callback_session,
-            stored_session,
-            expired,
-        )
-        await update.effective_message.reply_text(messages.ADD_SUPPLIER_STALE)
-        return False
-    logger.info("Add session validated %s", callback_session)
     return True
 
 
@@ -143,7 +138,7 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     store = await run_blocking(get_default_store)
     context.user_data["store"] = store
-    session_id = _start_add_session(context)
+    session_id = _start_add_session(context, update.effective_user.id)
     try:
         next_id = await run_blocking(fetch_next_sku)
         next_id_hint = messages.ADD_NEXT_ID_HINT.format(next_id=next_id)
@@ -203,7 +198,7 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = context.user_data["page"]
     query = context.user_data["query"]
-    session_id = context.user_data.get("add_session_id", "")
+    session_id = context.user_data.get("add_session_token", "")
     try:
         store = context.user_data.get("store")
         results = await run_blocking(discogs_service.search_releases, store, query, page, 50)
@@ -266,7 +261,7 @@ async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TY
     store = context.user_data.get("store")
     release = await run_blocking(discogs_service.fetch_release, store, int(release_id))
     context.user_data["release"] = release
-    session_id = context.user_data.get("add_session_id", "")
+    session_id = context.user_data.get("add_session_token", "")
 
     await update.callback_query.edit_message_text(
         messages.ADD_SELECT_CONDITION.format(title=release.get("title", "")),
@@ -543,7 +538,7 @@ async def handle_other_quantity(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_other_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["manual_description"] = update.message.text.strip()
     context.user_data["other_photos"] = []
-    session_id = context.user_data.get("add_session_id", "")
+    session_id = context.user_data.get("add_session_token", "")
     buttons = InlineKeyboardMarkup(
         [
             [
@@ -562,7 +557,7 @@ async def handle_other_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return OTHER_PHOTOS
     file_id = update.message.photo[-1].file_id
     photos.append(file_id)
-    session_id = context.user_data.get("add_session_id", "")
+    session_id = context.user_data.get("add_session_token", "")
     buttons = InlineKeyboardMarkup(
         [
             [
@@ -591,7 +586,7 @@ async def handle_other_photo_action(update: Update, context: ContextTypes.DEFAUL
     if not context.user_data.get("other_photos"):
         await update.effective_message.reply_text(messages.ADD_OTHER_PHOTOS_REQUIRED)
         return OTHER_PHOTOS
-    session_id = context.user_data.get("add_session_id", "")
+    session_id = context.user_data.get("add_session_token", "")
     confirm_buttons = InlineKeyboardMarkup(
         [
             [
@@ -702,7 +697,7 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     suppliers = await run_blocking(get_suppliers)
-    session_id = context.user_data.get("add_session_id", "")
+    session_id = context.user_data.get("add_session_token", "")
     if suppliers:
         context.user_data["suppliers_by_id"] = {row["id"]: row["name"] for row in suppliers}
         buttons = [

@@ -4,12 +4,14 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
 from config.settings import load_settings
-from services.order_service import get_order_by_woo_id, list_recent_orders, upsert_order_snapshot
-from services.store_service import get_default_store
-from services.woo_service import fetch_order_by_id, update_order_status
 from jobs.worker_tasks import sync_order_state
+from services.order_service import get_order_by_woo_id, list_recent_orders, upsert_order_snapshot
 from services.runtime import run_blocking
+from services.store_service import get_default_store
+from services.ui_session_service import create_callback_session, inject_session
+from services.woo_service import fetch_order_by_id, update_order_status
 from telegram_ui.auth import auth_manager, require_admin, require_auth
+from telegram_ui.session_guard import validate_callback_or_reject
 
 
 @require_auth
@@ -25,6 +27,10 @@ async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No recent orders found.")
         return
 
+    session = create_callback_session(user_id=update.effective_user.id, expected_node="orders", expected_state="listing")
+    session_token = str(session["session_token"])
+    context.user_data["orders_session_token"] = session_token
+
     buttons = []
     lines = ["🧾 Recent Orders:"]
     for order in orders:
@@ -32,7 +38,7 @@ async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = order.get("status") or "unknown"
         total = order.get("total") or ""
         lines.append(f"• #{woo_id} ({status}) {total}")
-        buttons.append([InlineKeyboardButton(f"View #{woo_id}", callback_data=f"order:view:{woo_id}")])
+        buttons.append([InlineKeyboardButton(f"View #{woo_id}", callback_data=inject_session(f"order:view:{woo_id}", session_token))])
 
     await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -42,6 +48,10 @@ async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         return
     await query.answer()
+
+    ok, data = await validate_callback_or_reject(update, context, expected_node="orders")
+    if not ok:
+        return
 
     user_id = query.from_user.id if query.from_user else None
     if user_id is None:
@@ -54,7 +64,7 @@ async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🚫 Admin access required for this action.")
         return
 
-    parts = query.data.split(":")
+    parts = data.split(":")
     if len(parts) < 3:
         return
 
@@ -67,13 +77,13 @@ async def order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if action == "view":
-        await _show_order(query, store, woo_order_id)
+        await _show_order(query, store, woo_order_id, context.user_data.get("orders_session_token", ""))
     elif action == "status":
         new_status = parts[3] if len(parts) > 3 else ""
         await _update_status(query, store, woo_order_id, new_status)
 
 
-async def _show_order(query, store: dict, woo_order_id: int) -> None:
+async def _show_order(query, store: dict, woo_order_id: int, session_token: str) -> None:
     order = get_order_by_woo_id(int(store["id"]), woo_order_id)
     if not order:
         fresh = fetch_order_by_id(store, woo_order_id)
@@ -94,10 +104,10 @@ async def _show_order(query, store: dict, woo_order_id: int) -> None:
     )
 
     buttons = [
-        [InlineKeyboardButton("Pending → Processing", callback_data=f"order:status:{woo_order_id}:processing")],
-        [InlineKeyboardButton("Processing → Completed", callback_data=f"order:status:{woo_order_id}:completed")],
-        [InlineKeyboardButton("Processing → On-hold", callback_data=f"order:status:{woo_order_id}:on-hold")],
-        [InlineKeyboardButton("Cancel", callback_data=f"order:status:{woo_order_id}:cancelled")],
+        [InlineKeyboardButton("Pending → Processing", callback_data=inject_session(f"order:status:{woo_order_id}:processing", session_token))],
+        [InlineKeyboardButton("Processing → Completed", callback_data=inject_session(f"order:status:{woo_order_id}:completed", session_token))],
+        [InlineKeyboardButton("Processing → On-hold", callback_data=inject_session(f"order:status:{woo_order_id}:on-hold", session_token))],
+        [InlineKeyboardButton("Cancel", callback_data=inject_session(f"order:status:{woo_order_id}:cancelled", session_token))],
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 

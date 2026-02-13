@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from services.ui_session_service import create_callback_session, inject_session
 from telegram_ui.menus.admin import MENU as ADMIN_MENU
 from telegram_ui.menus.common import MenuDefinition, MenuButton, back_button, home_button, menu_button
 from telegram_ui.menus.discogs import MENU as DISCOGS_MENU
@@ -134,12 +135,23 @@ def _build_breadcrumb(menu_id: str) -> str:
     return " › ".join(reversed(trail))
 
 
-def build_inline_menu(menu_id: str) -> tuple[str, InlineKeyboardMarkup]:
+def build_inline_menu(menu_id: str, *, user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
     definition = MENUS[menu_id]
-    rows = [[InlineKeyboardButton(text=button.label, callback_data=button.callback_data)] for button in definition.buttons]
+    session_token = None
+    if user_id is not None:
+        session = create_callback_session(user_id=user_id, expected_node=f"nav:{menu_id}", expected_state="menu")
+        session_token = str(session["session_token"])
+
+    rows = [
+        [InlineKeyboardButton(text=button.label, callback_data=inject_session(button.callback_data, session_token) if session_token else button.callback_data)]
+        for button in definition.buttons
+    ]
 
     if menu_id != "main":
-        nav_buttons: tuple[MenuButton, MenuButton] = (back_button(menu_id), home_button())
+        nav_buttons: tuple[MenuButton, MenuButton] = (
+            back_button(menu_id, session_token=session_token),
+            home_button(session_token=session_token),
+        )
         rows.append([InlineKeyboardButton(text=btn.label, callback_data=btn.callback_data) for btn in nav_buttons])
 
     text = f"📍 { _build_breadcrumb(menu_id) }\nChoose an action:"
