@@ -12,6 +12,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandl
 
 from services import discogs_service
 from services.discogs_sync_service import sync_discogs_item
+from services.add_session_service import create_add_session, validate_add_callback
 from services.store_service import get_default_store, get_store_settings
 from services.inventory_service import (
     get_or_create_supplier,
@@ -23,7 +24,6 @@ from services.inventory_service import (
 from services.product_map_service import find_mapping_by_internal_id, upsert_product_map
 from services.runtime import run_blocking
 from services.sync_engine import SyncEngine
-from services.ui_session_service import create_callback_session, validate_callback_session
 from services.tri_sync_service import poll_discogs_listings, poll_woo_products
 from services.woo_service import (
     WooNotConfigured,
@@ -88,11 +88,24 @@ def _fetch_usd_to_gel() -> float:
 
 
 def _start_add_session(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
-    session = create_callback_session(user_id=user_id, expected_node="add", expected_state="add_flow")
-    token = str(session["session_token"])
-    context.user_data["add_session_token"] = token
+    session = create_add_session()
+    token = str(session["session_id"])
+    context.user_data["add_session"] = session
     logger.info("Started /add session %s", session["session_id"])
     return token
+
+
+def _set_expected_step(context: ContextTypes.DEFAULT_TYPE, expected_step: str) -> None:
+    session = context.user_data.get("add_session")
+    if isinstance(session, dict):
+        session["expected_step"] = expected_step
+
+
+def _current_add_session_id(context: ContextTypes.DEFAULT_TYPE) -> str:
+    session = context.user_data.get("add_session")
+    if isinstance(session, dict):
+        return str(session.get("session_id") or "")
+    return ""
 
 
 async def _ack_callback(update: Update) -> None:
@@ -117,14 +130,12 @@ async def _validate_add_session(update: Update, context: ContextTypes.DEFAULT_TY
     if not update.callback_query:
         return True
     parsed = _parse_add_callback(update.callback_query.data)
-    token = parsed[1] if parsed else None
-    user_id = update.callback_query.from_user.id if update.callback_query.from_user else 0
-    ok, reason = await run_blocking(
-        validate_callback_session,
-        session_token=token,
-        user_id=user_id,
-        expected_node="add",
-        expected_state="add_flow",
+    session_id = parsed[1] if parsed else None
+    action = parsed[0] if parsed else None
+    ok, reason = validate_add_callback(
+        session=context.user_data.get("add_session"),
+        callback_session_id=session_id,
+        callback_action=action,
     )
     if not ok:
         correlation_id = f"cbq:{update.callback_query.id}" if update.callback_query.id else f"upd:{update.update_id}"
@@ -159,6 +170,7 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{next_id_hint}\n\n{messages.ADD_TYPE_PROMPT}",
         reply_markup=keyboard,
     )
+    _set_expected_step(context, "choose_type")
     return CHOOSE_TYPE
 
 
@@ -198,7 +210,7 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = context.user_data["page"]
     query = context.user_data["query"]
-    session_id = context.user_data.get("add_session_token", "")
+    session_id = _current_add_session_id(context)
     try:
         store = context.user_data.get("store")
         results = await run_blocking(discogs_service.search_releases, store, query, page, 50)
@@ -228,6 +240,7 @@ async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             messages.ADD_SELECT_RELEASE, reply_markup=InlineKeyboardMarkup(buttons)
         )
+    _set_expected_step(context, "show_results")
     return SHOW_RESULTS
 
 
@@ -261,7 +274,7 @@ async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TY
     store = context.user_data.get("store")
     release = await run_blocking(discogs_service.fetch_release, store, int(release_id))
     context.user_data["release"] = release
-    session_id = context.user_data.get("add_session_token", "")
+    session_id = _current_add_session_id(context)
 
     await update.callback_query.edit_message_text(
         messages.ADD_SELECT_CONDITION.format(title=release.get("title", "")),
@@ -275,6 +288,7 @@ async def handle_release_select(update: Update, context: ContextTypes.DEFAULT_TY
             ]
         ),
     )
+    _set_expected_step(context, "ask_condition")
     return ASK_CONDITION
 
 
@@ -538,7 +552,7 @@ async def handle_other_quantity(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_other_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["manual_description"] = update.message.text.strip()
     context.user_data["other_photos"] = []
-    session_id = context.user_data.get("add_session_token", "")
+    session_id = _current_add_session_id(context)
     buttons = InlineKeyboardMarkup(
         [
             [
@@ -548,6 +562,7 @@ async def handle_other_description(update: Update, context: ContextTypes.DEFAULT
         ]
     )
     await update.message.reply_text(messages.ADD_OTHER_PHOTOS_PROMPT, reply_markup=buttons)
+    _set_expected_step(context, "other_photos")
     return OTHER_PHOTOS
 
 
@@ -557,7 +572,7 @@ async def handle_other_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return OTHER_PHOTOS
     file_id = update.message.photo[-1].file_id
     photos.append(file_id)
-    session_id = context.user_data.get("add_session_token", "")
+    session_id = _current_add_session_id(context)
     buttons = InlineKeyboardMarkup(
         [
             [
@@ -567,6 +582,7 @@ async def handle_other_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
     )
     await update.message.reply_text(messages.ADD_OTHER_PHOTOS_REMINDER, reply_markup=buttons)
+    _set_expected_step(context, "other_photos")
     return OTHER_PHOTOS
 
 
@@ -586,7 +602,7 @@ async def handle_other_photo_action(update: Update, context: ContextTypes.DEFAUL
     if not context.user_data.get("other_photos"):
         await update.effective_message.reply_text(messages.ADD_OTHER_PHOTOS_REQUIRED)
         return OTHER_PHOTOS
-    session_id = context.user_data.get("add_session_token", "")
+    session_id = _current_add_session_id(context)
     confirm_buttons = InlineKeyboardMarkup(
         [
             [
@@ -596,6 +612,7 @@ async def handle_other_photo_action(update: Update, context: ContextTypes.DEFAUL
         ]
     )
     await update.effective_message.reply_text(messages.ADD_OTHER_CONFIRM_PROMPT, reply_markup=confirm_buttons)
+    _set_expected_step(context, "confirm")
     return CONFIRM
 
 
@@ -697,7 +714,7 @@ async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     suppliers = await run_blocking(get_suppliers)
-    session_id = context.user_data.get("add_session_token", "")
+    session_id = _current_add_session_id(context)
     if suppliers:
         context.user_data["suppliers_by_id"] = {row["id"]: row["name"] for row in suppliers}
         buttons = [
@@ -710,6 +727,7 @@ async def _prompt_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
     else:
         await update.effective_message.reply_text(messages.ADD_SUPPLIER_PROMPT)
+    _set_expected_step(context, "ask_supplier")
 
 
 def start_add_flow() -> ConversationHandler:
