@@ -10,6 +10,7 @@ from config.settings import load_settings
 from services.runtime import run_blocking
 from services.store_service import get_default_store
 from telegram_ui.callback_contract import NavigationCallback, parse_navigation_callback
+from telegram_ui.session_guard import validate_callback_or_reject
 from telegram_ui.menus.main import build_inline_menu, get_command_target, get_menu
 
 
@@ -65,7 +66,9 @@ async def _dispatch_callback_target(
             target_menu = menu
             if callback.action == "back":
                 target_menu = get_menu(menu.parent_id) if menu.parent_id else get_menu("main")
-            text, markup = build_inline_menu(target_menu.menu_id)
+            user_id = update.callback_query.from_user.id if update.callback_query and update.callback_query.from_user else None
+            text, markup = build_inline_menu(target_menu.menu_id, user_id=user_id)
+            context.user_data["active_menu_id"] = target_menu.menu_id
             await update.callback_query.edit_message_text(text=text, reply_markup=markup)
             await update.callback_query.answer()
             return
@@ -91,7 +94,15 @@ async def handle_navigation_callback(update: Update, context: ContextTypes.DEFAU
     if not query or not query.data:
         return
 
-    callback = parse_navigation_callback(query.data)
+    ok, normalized_data = await validate_callback_or_reject(
+        update,
+        context,
+        expected_node=f"nav:{context.user_data.get('active_menu_id', 'main')}",
+        expected_state="menu",
+    )
+    if not ok:
+        return
+    callback = parse_navigation_callback(normalized_data)
     if not callback:
         await query.answer("Unsupported navigation callback", show_alert=False)
         return

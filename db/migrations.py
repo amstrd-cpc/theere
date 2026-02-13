@@ -47,7 +47,7 @@ SALES_COLUMNS = {
 }
 
 
-LATEST_VERSION = 6
+LATEST_VERSION = 7
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -139,6 +139,21 @@ def _create_inventory(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ui_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            expected_node TEXT NOT NULL,
+            expected_state TEXT,
+            issued_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_sessions_user_id ON ui_sessions(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_sessions_expires_at ON ui_sessions(expires_at)")
 
 
 def _create_sales(conn: sqlite3.Connection) -> None:
@@ -566,6 +581,23 @@ def migrate() -> None:
             _create_woo_tables(conn)
             _set_version(conn, 6)
             current_version = 6
+        if current_version < 7:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ui_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    expected_node TEXT NOT NULL,
+                    expected_state TEXT,
+                    issued_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_sessions_user_id ON ui_sessions(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_sessions_expires_at ON ui_sessions(expires_at)")
+            _set_version(conn, 7)
+            current_version = 7
         conn.commit()
 
     with get_sales_db() as conn:

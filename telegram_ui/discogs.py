@@ -18,7 +18,9 @@ from services.inventory_service import get_inventory_by_id, search_inventory, up
 from services.product_map_service import clear_discogs_listing, find_mapping_by_internal_id, upsert_product_map
 from services.runtime import run_blocking
 from services.store_service import get_default_store, get_store_settings, update_store_discogs
+from services.ui_session_service import create_callback_session, inject_session
 from telegram_ui.auth import require_admin, require_auth
+from telegram_ui.session_guard import validate_callback_or_reject
 
 ASK_TOKEN = 0
 SEARCHING, SELECTING, CONFIRMING, EXTRA_INPUT, BULK_SELECTING, FIELD_INPUT, BULK_INPUT, SYNCING = range(1, 9)
@@ -42,6 +44,16 @@ DISCogs_ACTIONS = {
     "discogs_refresh": "Refresh Discogs quantity",
     "sync_discogs_all": "Sync all to Discogs",
 }
+
+
+def _discogs_session_token(context: ContextTypes.DEFAULT_TYPE) -> str:
+    return context.user_data.get("discogs_session_token", "")
+
+
+def _start_discogs_session(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
+    token = str(create_callback_session(user_id=user_id, expected_node="discogs", expected_state="flow")["session_token"])
+    context.user_data["discogs_session_token"] = token
+    return token
 
 
 def _listings_enabled(store_id: int) -> bool:
@@ -69,21 +81,21 @@ def _discogs_payload(item: dict, *, price: float, condition: str, sleeve_conditi
     }
 
 
-def _build_search_keyboard(items: list[dict], action: str) -> InlineKeyboardMarkup:
+def _build_search_keyboard(items: list[dict], action: str, session_token: str) -> InlineKeyboardMarkup:
     buttons = []
     for item in items:
         text = f"{item.get('artist_album', 'Item')} (Qty: {item.get('quantity', 0)})"
         if len(text) > 60:
             text = text[:57] + "..."
-        buttons.append([InlineKeyboardButton(text, callback_data=f"discogs_select:{action}:{item['id']}")])
+        buttons.append([InlineKeyboardButton(text, callback_data=inject_session(f"discogs_select:{action}:{item['id']}", session_token))])
     return InlineKeyboardMarkup(buttons)
 
 
-def _build_confirm_keyboard(action: str, item_id: int) -> InlineKeyboardMarkup:
+def _build_confirm_keyboard(action: str, item_id: int, session_token: str) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton("✅ Confirm", callback_data=f"discogs_confirm:{action}:{item_id}:yes"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"discogs_confirm:{action}:{item_id}:no"),
+            InlineKeyboardButton("✅ Confirm", callback_data=inject_session(f"discogs_confirm:{action}:{item_id}:yes", session_token)),
+            InlineKeyboardButton("❌ Cancel", callback_data=inject_session(f"discogs_confirm:{action}:{item_id}:no", session_token)),
         ]
     ]
     return InlineKeyboardMarkup(buttons)
@@ -95,7 +107,7 @@ def _bulk_done_label(action: str) -> str:
     return "📦 Publish selected"
 
 
-def _build_bulk_select_keyboard(items: list[dict], selected: set[int], *, action: str) -> InlineKeyboardMarkup:
+def _build_bulk_select_keyboard(items: list[dict], selected: set[int], *, action: str, session_token: str) -> InlineKeyboardMarkup:
     buttons = []
     for item in items:
         item_id = int(item["id"])
@@ -103,35 +115,35 @@ def _build_bulk_select_keyboard(items: list[dict], selected: set[int], *, action
         text = f"{prefix}{item.get('artist_album', 'Item')}"
         if len(text) > 60:
             text = text[:57] + "..."
-        buttons.append([InlineKeyboardButton(text, callback_data=f"discogs_bulk_toggle:{item_id}")])
+        buttons.append([InlineKeyboardButton(text, callback_data=inject_session(f"discogs_bulk_toggle:{item_id}", session_token))])
     buttons.append(
         [
-            InlineKeyboardButton(_bulk_done_label(action), callback_data="discogs_bulk_done"),
-            InlineKeyboardButton("❌ Cancel", callback_data="discogs_bulk_cancel"),
+            InlineKeyboardButton(_bulk_done_label(action), callback_data=inject_session("discogs_bulk_done", session_token)),
+            InlineKeyboardButton("❌ Cancel", callback_data=inject_session("discogs_bulk_cancel", session_token)),
         ]
     )
     return InlineKeyboardMarkup(buttons)
 
 
-def _build_bulk_skip_keyboard() -> InlineKeyboardMarkup:
+def _build_bulk_skip_keyboard(session_token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("⏭️ Skip item", callback_data="discogs_bulk_skip"),
-                InlineKeyboardButton("❌ Cancel bulk", callback_data="discogs_bulk_cancel"),
+                InlineKeyboardButton("⏭️ Skip item", callback_data=inject_session("discogs_bulk_skip", session_token)),
+                InlineKeyboardButton("❌ Cancel bulk", callback_data=inject_session("discogs_bulk_cancel", session_token)),
             ]
         ]
     )
 
 
-def _build_sync_all_keyboard() -> InlineKeyboardMarkup:
+def _build_sync_all_keyboard(session_token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🎶 Sync collection only", callback_data="discogs_sync_all:collection"),
-                InlineKeyboardButton("📦 Sync + publish listings", callback_data="discogs_sync_all:publish"),
+                InlineKeyboardButton("🎶 Sync collection only", callback_data=inject_session("discogs_sync_all:collection", session_token)),
+                InlineKeyboardButton("📦 Sync + publish listings", callback_data=inject_session("discogs_sync_all:publish", session_token)),
             ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="discogs_sync_all:cancel")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=inject_session("discogs_sync_all:cancel", session_token))],
         ]
     )
 
@@ -268,6 +280,7 @@ async def discogs_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def publish_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -282,6 +295,7 @@ async def publish_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def publish_discogs_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -296,6 +310,7 @@ async def publish_discogs_all(update: Update, context: ContextTypes.DEFAULT_TYPE
 @require_auth
 @require_admin
 async def publish_discogs_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -310,6 +325,7 @@ async def publish_discogs_selection(update: Update, context: ContextTypes.DEFAUL
 @require_auth
 @require_admin
 async def collect_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -322,6 +338,7 @@ async def collect_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def collect_discogs_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -334,6 +351,7 @@ async def collect_discogs_selection(update: Update, context: ContextTypes.DEFAUL
 @require_auth
 @require_admin
 async def link_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -346,6 +364,7 @@ async def link_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def update_discogs_listing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -360,6 +379,7 @@ async def update_discogs_listing(update: Update, context: ContextTypes.DEFAULT_T
 @require_auth
 @require_admin
 async def unlist_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -374,6 +394,7 @@ async def unlist_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def relist_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -388,6 +409,7 @@ async def relist_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def remove_discogs_listing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -402,6 +424,7 @@ async def remove_discogs_listing(update: Update, context: ContextTypes.DEFAULT_T
 @require_auth
 @require_admin
 async def unlink_discogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -444,6 +467,7 @@ async def reconcile_woo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def discogs_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
@@ -456,13 +480,14 @@ async def discogs_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 @require_admin
 async def sync_discogs_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _start_discogs_session(context, update.effective_user.id)
     store = get_default_store()
     if not store:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
     await update.message.reply_text(
         "How should I sync all inventory to Discogs? WooCommerce stock is treated as the source of truth.",
-        reply_markup=_build_sync_all_keyboard(),
+        reply_markup=_build_sync_all_keyboard(_discogs_session_token(context)),
     )
     return SYNCING
 
@@ -492,7 +517,7 @@ async def handle_discogs_search(update: Update, context: ContextTypes.DEFAULT_TY
         message = f"Select items to {label} ({len(items)} match(es)):"
         await update.message.reply_text(
             message,
-            reply_markup=_build_bulk_select_keyboard(items, set(), action=action),
+            reply_markup=_build_bulk_select_keyboard(items, set(), action=action, session_token=_discogs_session_token(context)),
         )
         return BULK_SELECTING
 
@@ -501,12 +526,12 @@ async def handle_discogs_search(update: Update, context: ContextTypes.DEFAULT_TY
         verb = "Publish" if action == "publish_discogs_all" else "Add"
         suffix = "to Discogs" if action == "publish_discogs_all" else "to your collection"
         message = f"{verb} ALL {len(items)} item(s) that match '{query}' {suffix}?"
-        await update.message.reply_text(message, reply_markup=_build_confirm_keyboard(action, int(items[0]["id"])))
+        await update.message.reply_text(message, reply_markup=_build_confirm_keyboard(action, int(items[0]["id"]), _discogs_session_token(context)))
         return CONFIRMING
 
     label = DISCogs_ACTIONS.get(action, "Select an item")
     message = f"{label}\n\nFound {len(items)} match(es). Tap the correct item:"
-    await update.message.reply_text(message, reply_markup=_build_search_keyboard(items, action))
+    await update.message.reply_text(message, reply_markup=_build_search_keyboard(items, action, _discogs_session_token(context)))
     return SELECTING
 
 
@@ -515,7 +540,9 @@ async def handle_discogs_search(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_discogs_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data or ""
+    ok, data = await validate_callback_or_reject(update, context, expected_node="discogs")
+    if not ok:
+        return ConversationHandler.END
     _, action, item_id = data.split(":", 2)
     item = await run_blocking(get_inventory_by_id, int(item_id))
     if not item:
@@ -532,7 +559,7 @@ async def handle_discogs_select(update: Update, context: ContextTypes.DEFAULT_TY
         return EXTRA_INPUT
 
     confirm_text = f"{_format_item_summary(item)}\n\nProceed with: {DISCogs_ACTIONS.get(action, action)}?"
-    await query.edit_message_text(confirm_text, reply_markup=_build_confirm_keyboard(action, int(item_id)))
+    await query.edit_message_text(confirm_text, reply_markup=_build_confirm_keyboard(action, int(item_id), _discogs_session_token(context)))
     return CONFIRMING
 
 
@@ -541,7 +568,9 @@ async def handle_discogs_select(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_discogs_bulk_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data or ""
+    ok, data = await validate_callback_or_reject(update, context, expected_node="discogs")
+    if not ok:
+        return ConversationHandler.END
     if data == "discogs_bulk_cancel":
         context.user_data.pop("discogs_bulk_items", None)
         context.user_data.pop("discogs_bulk_selected", None)
@@ -557,7 +586,7 @@ async def handle_discogs_bulk_select(update: Update, context: ContextTypes.DEFAU
         bulk_action = "collect_discogs_bulk" if action.startswith("collect_discogs") else "publish_discogs_bulk"
         await query.edit_message_text(
             f"{DISCogs_ACTIONS.get(bulk_action, 'Proceed')}?",
-            reply_markup=_build_confirm_keyboard(bulk_action, int(list(selected)[0])),
+            reply_markup=_build_confirm_keyboard(bulk_action, int(list(selected)[0]), _discogs_session_token(context)),
         )
         return CONFIRMING
 
@@ -575,7 +604,7 @@ async def handle_discogs_bulk_select(update: Update, context: ContextTypes.DEFAU
     context.user_data["discogs_bulk_selected"] = selected
     await query.edit_message_text(
         f"Selected {len(selected)} item(s).",
-        reply_markup=_build_bulk_select_keyboard(items, selected, action=context.user_data.get("discogs_action") or ""),
+        reply_markup=_build_bulk_select_keyboard(items, selected, action=context.user_data.get("discogs_action") or "", session_token=_discogs_session_token(context)),
     )
     return BULK_SELECTING
 
@@ -607,7 +636,7 @@ async def handle_discogs_extra(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     await update.message.reply_text(
         confirm_text,
-        reply_markup=_build_confirm_keyboard(action, int(item_id)),
+        reply_markup=_build_confirm_keyboard(action, int(item_id), _discogs_session_token(context)),
     )
     return CONFIRMING
 
@@ -649,12 +678,12 @@ async def _prompt_missing_field(
     prompt = _discogs_field_prompt(field, item)
     if update.callback_query:
         if bulk:
-            await update.callback_query.edit_message_text(prompt, reply_markup=_build_bulk_skip_keyboard())
+            await update.callback_query.edit_message_text(prompt, reply_markup=_build_bulk_skip_keyboard(_discogs_session_token(context)))
         else:
             await update.callback_query.edit_message_text(prompt)
     else:
         if bulk:
-            await update.message.reply_text(prompt, reply_markup=_build_bulk_skip_keyboard())
+            await update.message.reply_text(prompt, reply_markup=_build_bulk_skip_keyboard(_discogs_session_token(context)))
         else:
             await update.message.reply_text(prompt)
     return BULK_INPUT if bulk else FIELD_INPUT
@@ -715,7 +744,9 @@ async def _advance_bulk_discogs(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_discogs_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data or ""
+    ok, data = await validate_callback_or_reject(update, context, expected_node="discogs")
+    if not ok:
+        return ConversationHandler.END
     _, action, item_id, decision = data.split(":", 3)
     if decision != "yes":
         await query.edit_message_text("❌ Cancelled.")
@@ -959,7 +990,9 @@ async def handle_discogs_bulk_input(update: Update, context: ContextTypes.DEFAUL
 async def handle_discogs_bulk_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data or ""
+    ok, data = await validate_callback_or_reject(update, context, expected_node="discogs")
+    if not ok:
+        return ConversationHandler.END
     if data == "discogs_bulk_cancel":
         await query.edit_message_text("❌ Bulk action cancelled.")
         return ConversationHandler.END
@@ -979,7 +1012,9 @@ async def handle_discogs_bulk_skip(update: Update, context: ContextTypes.DEFAULT
 async def handle_discogs_sync_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data or ""
+    ok, data = await validate_callback_or_reject(update, context, expected_node="discogs")
+    if not ok:
+        return ConversationHandler.END
     _, mode = data.split(":", 1)
     if mode == "cancel":
         await query.edit_message_text("❌ Discogs sync cancelled.")

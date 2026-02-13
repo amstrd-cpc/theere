@@ -10,15 +10,17 @@ from services.discogs_sync_service import sync_all_discogs
 from services.runtime import run_blocking
 from services.store_service import get_default_store, get_store_settings, update_store_settings
 from services.sync_engine import SyncEngine
+from services.ui_session_service import create_callback_session, inject_session
 from services.woo_service import is_configured
 from telegram_ui.auth import require_admin, require_auth
+from telegram_ui.session_guard import validate_callback_or_reject
 
 
 def _bool_label(value: bool, on: str = "ON", off: str = "OFF") -> str:
     return on if value else off
 
 
-def _woo_keyboard(settings: dict) -> InlineKeyboardMarkup:
+def _woo_keyboard(settings: dict , session_token: str) -> InlineKeyboardMarkup:
     strategy = (settings.get("woo_sync_strategy") or "lww").lower()
     def _strategy_label(value: str, label: str) -> str:
         return f"✅ {label}" if strategy == value else label
@@ -27,85 +29,85 @@ def _woo_keyboard(settings: dict) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 f"Periodic Sync: {_bool_label(settings.get('woo_sync_enabled'))}",
-                callback_data="integrations:woo:toggle:woo_sync_enabled",
+                callback_data=inject_session("integrations:woo:toggle:woo_sync_enabled", session_token),
             )
         ],
         [
             InlineKeyboardButton(
                 f"Instant Sync: {_bool_label(settings.get('woo_instant_sync_enabled'))}",
-                callback_data="integrations:woo:toggle:woo_instant_sync_enabled",
+                callback_data=inject_session("integrations:woo:toggle:woo_instant_sync_enabled", session_token),
             )
         ],
         [
             InlineKeyboardButton(
                 f"Orders Auto-Decrement: {_bool_label(settings.get('auto_decrement_enabled'))}",
-                callback_data="integrations:woo:toggle:auto_decrement_enabled",
+                callback_data=inject_session("integrations:woo:toggle:auto_decrement_enabled", session_token),
             )
         ],
         [
             InlineKeyboardButton(
                 f"Orders Notifications: {_bool_label(settings.get('orders_admin_notifications'))}",
-                callback_data="integrations:woo:toggle:orders_admin_notifications",
+                callback_data=inject_session("integrations:woo:toggle:orders_admin_notifications", session_token),
             )
         ],
         [
-            InlineKeyboardButton(_strategy_label("lww", "Last-write-wins"), callback_data="integrations:woo:strategy:lww"),
-            InlineKeyboardButton(_strategy_label("woo", "Woo wins"), callback_data="integrations:woo:strategy:woo"),
+            InlineKeyboardButton(_strategy_label("lww", "Last-write-wins"), callback_data=inject_session("integrations:woo:strategy:lww", session_token)),
+            InlineKeyboardButton(_strategy_label("woo", "Woo wins"), callback_data=inject_session("integrations:woo:strategy:woo", session_token)),
         ],
         [
-            InlineKeyboardButton(_strategy_label("local", "Local wins"), callback_data="integrations:woo:strategy:local"),
+            InlineKeyboardButton(_strategy_label("local", "Local wins"), callback_data=inject_session("integrations:woo:strategy:local", session_token)),
         ],
         [
-            InlineKeyboardButton("Run sync now", callback_data="integrations:woo:run_sync"),
+            InlineKeyboardButton("Run sync now", callback_data=inject_session("integrations:woo:run_sync", session_token)),
         ],
     ]
     return InlineKeyboardMarkup(buttons)
 
 
-def _discogs_keyboard(settings: dict, connected: bool) -> InlineKeyboardMarkup:
+def _discogs_keyboard(settings: dict, connected: bool , session_token: str) -> InlineKeyboardMarkup:
     buttons = [
         [
             InlineKeyboardButton(
                 f"Collection Sync: {_bool_label(settings.get('discogs_collection_sync_enabled'))}",
-                callback_data="integrations:discogs:toggle:discogs_collection_sync_enabled",
+                callback_data=inject_session("integrations:discogs:toggle:discogs_collection_sync_enabled", session_token),
             )
         ],
         [
             InlineKeyboardButton(
                 f"Listings Sync: {_bool_label(settings.get('discogs_listings_enabled'))}",
-                callback_data="integrations:discogs:toggle:discogs_listings_enabled",
+                callback_data=inject_session("integrations:discogs:toggle:discogs_listings_enabled", session_token),
             )
         ],
         [
             InlineKeyboardButton(
                 f"Three-way Sync: {_bool_label(settings.get('three_way_sync_enabled'))}",
-                callback_data="integrations:discogs:toggle:three_way_sync_enabled",
+                callback_data=inject_session("integrations:discogs:toggle:three_way_sync_enabled", session_token),
             )
         ],
         [
             InlineKeyboardButton(
                 "Update Discogs Token" if connected else "Connect Discogs",
-                callback_data="integrations:discogs:connect",
+                callback_data=inject_session("integrations:discogs:connect", session_token),
             )
         ],
     ]
     return InlineKeyboardMarkup(buttons)
 
 
-def _sync_keyboard() -> InlineKeyboardMarkup:
+def _sync_keyboard(session_token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Run Woo sync now", callback_data="integrations:sync:woo_run")],
+            [InlineKeyboardButton("Run Woo sync now", callback_data=inject_session("integrations:sync:woo_run", session_token))],
             [
-                InlineKeyboardButton("Reconcile Woo", callback_data="integrations:sync:woo_reconcile"),
-                InlineKeyboardButton("Reconcile Discogs", callback_data="integrations:sync:discogs_reconcile"),
+                InlineKeyboardButton("Reconcile Woo", callback_data=inject_session("integrations:sync:woo_reconcile", session_token)),
+                InlineKeyboardButton("Reconcile Discogs", callback_data=inject_session("integrations:sync:discogs_reconcile", session_token)),
             ],
-            [InlineKeyboardButton("Sync all Discogs", callback_data="integrations:sync:discogs_all")],
+            [InlineKeyboardButton("Sync all Discogs", callback_data=inject_session("integrations:sync:discogs_all", session_token))],
             [
-                InlineKeyboardButton("Woo settings", callback_data="integrations:sync:open_woo"),
-                InlineKeyboardButton("Discogs settings", callback_data="integrations:sync:open_discogs"),
+                InlineKeyboardButton("Woo settings", callback_data=inject_session("integrations:sync:open_woo", session_token)),
+                InlineKeyboardButton("Discogs settings", callback_data=inject_session("integrations:sync:open_discogs", session_token)),
             ],
-            [InlineKeyboardButton("Refresh sync status", callback_data="integrations:sync:status")],
+            [InlineKeyboardButton("Refresh sync status", callback_data=inject_session("integrations:sync:status", session_token))],
         ]
     )
 
@@ -130,7 +132,9 @@ async def sync_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
     settings = get_store_settings(int(store["id"]))
-    await update.message.reply_text(_format_sync_menu(store, settings), reply_markup=_sync_keyboard())
+    token = str(create_callback_session(user_id=update.effective_user.id, expected_node="integrations", expected_state="sync_menu")["session_token"])
+    context.user_data["integrations_session_token"] = token
+    await update.message.reply_text(_format_sync_menu(store, settings), reply_markup=_sync_keyboard(token))
 
 
 def _format_woo_status(store_id: int, settings: dict) -> str:
@@ -165,7 +169,9 @@ async def integrations_woo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
     settings = get_store_settings(int(store["id"]))
-    await update.message.reply_text(_format_woo_status(int(store["id"]), settings), reply_markup=_woo_keyboard(settings))
+    token = context.user_data.get("integrations_session_token") or str(create_callback_session(user_id=update.effective_user.id, expected_node="integrations", expected_state="woo")["session_token"])
+    context.user_data["integrations_session_token"] = token
+    await update.message.reply_text(_format_woo_status(int(store["id"]), settings), reply_markup=_woo_keyboard(settings, token))
 
 
 @require_auth
@@ -176,10 +182,12 @@ async def integrations_discogs(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
         return
     settings = get_store_settings(int(store["id"]))
+    token = context.user_data.get("integrations_session_token") or str(create_callback_session(user_id=update.effective_user.id, expected_node="integrations", expected_state="discogs")["session_token"])
+    context.user_data["integrations_session_token"] = token
     connected = bool(store.get("discogs_token"))
     await update.message.reply_text(
         _format_discogs_status(store, settings),
-        reply_markup=_discogs_keyboard(settings, connected),
+        reply_markup=_discogs_keyboard(settings, connected, token),
     )
 
 
@@ -323,7 +331,10 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
     if not query:
         return
     await query.answer()
-    data = query.data.split(":")
+    ok, normalized = await validate_callback_or_reject(update, context, expected_node="integrations")
+    if not ok:
+        return
+    data = normalized.split(":")
     if len(data) < 3:
         return
     store = get_default_store()
@@ -346,7 +357,7 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
             await run_blocking(SyncEngine().run_manual_sync, store_id)
             settings = get_store_settings(store_id)
         try:
-            await query.edit_message_text(_format_woo_status(store_id, settings), reply_markup=_woo_keyboard(settings))
+            await query.edit_message_text(_format_woo_status(store_id, settings), reply_markup=_woo_keyboard(settings, context.user_data.get("integrations_session_token", "")))
         except BadRequest as exc:
             if "Message is not modified" not in str(exc):
                 raise
@@ -363,7 +374,7 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
             await run_blocking(sync_all_discogs, store_id, publish_missing=True)
         elif action == "open_woo":
             try:
-                await query.edit_message_text(_format_woo_status(store_id, settings), reply_markup=_woo_keyboard(settings))
+                await query.edit_message_text(_format_woo_status(store_id, settings), reply_markup=_woo_keyboard(settings, context.user_data.get("integrations_session_token", "")))
             except BadRequest as exc:
                 if "Message is not modified" not in str(exc):
                     raise
@@ -373,7 +384,7 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
             try:
                 await query.edit_message_text(
                     _format_discogs_status(store, settings),
-                    reply_markup=_discogs_keyboard(settings, connected),
+                    reply_markup=_discogs_keyboard(settings, connected, context.user_data.get("integrations_session_token", "")),
                 )
             except BadRequest as exc:
                 if "Message is not modified" not in str(exc):
@@ -385,7 +396,7 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
         try:
             await query.edit_message_text(
                 _format_sync_menu(refreshed_store, settings),
-                reply_markup=_sync_keyboard(),
+                reply_markup=_sync_keyboard(context.user_data.get("integrations_session_token", "")),
             )
         except BadRequest as exc:
             if "Message is not modified" not in str(exc):
@@ -401,7 +412,7 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
             try:
                 await query.edit_message_text(
                     _format_discogs_status(store, settings),
-                    reply_markup=_discogs_keyboard(settings, connected),
+                    reply_markup=_discogs_keyboard(settings, connected, context.user_data.get("integrations_session_token", "")),
                 )
             except BadRequest as exc:
                 if "Message is not modified" not in str(exc):

@@ -17,9 +17,11 @@ from services.inventory_service import (
 )
 from services.runtime import run_blocking
 from services.store_service import get_default_store
+from services.ui_session_service import create_callback_session, inject_session
 from services.woo_service import is_configured
 from telegram_ui import messages
 from telegram_ui.auth import require_auth
+from telegram_ui.session_guard import validate_callback_or_reject
 
 logger = logging.getLogger(__name__)
 
@@ -75,31 +77,31 @@ def _format_detail(item: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_search_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+def _build_search_keyboard(items: list[dict], session_token: str) -> InlineKeyboardMarkup:
     buttons = []
     for item in items:
         text = f"{item.get('artist_album', 'Item')} (Qty: {item.get('quantity', 0)})"
         if len(text) > 60:
             text = text[:57] + "..."
-        buttons.append([InlineKeyboardButton(text, callback_data=f"inventory_item:{item['id']}")])
+        buttons.append([InlineKeyboardButton(text, callback_data=inject_session(f"inventory_item:{item['id']}", session_token))])
     return InlineKeyboardMarkup(buttons)
 
 
-def _build_edit_menu(item_id: int) -> InlineKeyboardMarkup:
+def _build_edit_menu(item_id: int, session_token: str) -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton("Edit Name", callback_data=f"inventory_edit:name:{item_id}")],
-        [InlineKeyboardButton("Edit Price", callback_data=f"inventory_edit:price:{item_id}")],
-        [InlineKeyboardButton("Edit Quantity", callback_data=f"inventory_edit:quantity:{item_id}")],
-        [InlineKeyboardButton("Edit Condition", callback_data=f"inventory_edit:condition:{item_id}")],
-        [InlineKeyboardButton("Edit Genre", callback_data=f"inventory_edit:genre:{item_id}")],
-        [InlineKeyboardButton("Edit Style", callback_data=f"inventory_edit:style:{item_id}")],
-        [InlineKeyboardButton("Edit Label", callback_data=f"inventory_edit:label:{item_id}")],
-        [InlineKeyboardButton("Edit Format", callback_data=f"inventory_edit:format:{item_id}")],
-        [InlineKeyboardButton("Edit Year", callback_data=f"inventory_edit:year:{item_id}")],
-        [InlineKeyboardButton("Edit Description", callback_data=f"inventory_edit:description:{item_id}")],
-        [InlineKeyboardButton("Edit Supplier", callback_data=f"inventory_edit:supplier:{item_id}")],
-        [InlineKeyboardButton("Sync to Woo", callback_data=f"inventory_sync:{item_id}")],
-        [InlineKeyboardButton("Back", callback_data="inventory_back")],
+        [InlineKeyboardButton("Edit Name", callback_data=inject_session(f"inventory_edit:name:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Price", callback_data=inject_session(f"inventory_edit:price:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Quantity", callback_data=inject_session(f"inventory_edit:quantity:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Condition", callback_data=inject_session(f"inventory_edit:condition:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Genre", callback_data=inject_session(f"inventory_edit:genre:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Style", callback_data=inject_session(f"inventory_edit:style:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Label", callback_data=inject_session(f"inventory_edit:label:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Format", callback_data=inject_session(f"inventory_edit:format:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Year", callback_data=inject_session(f"inventory_edit:year:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Description", callback_data=inject_session(f"inventory_edit:description:{item_id}", session_token))],
+        [InlineKeyboardButton("Edit Supplier", callback_data=inject_session(f"inventory_edit:supplier:{item_id}", session_token))],
+        [InlineKeyboardButton("Sync to Woo", callback_data=inject_session(f"inventory_sync:{item_id}", session_token))],
+        [InlineKeyboardButton("Back", callback_data=inject_session("inventory_back", session_token))],
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -131,7 +133,9 @@ async def _show_search_results(target, context: ContextTypes.DEFAULT_TYPE, query
     for i, item in enumerate(items, 1):
         message += _format_inventory_item(item, i)
 
-    keyboard = _build_search_keyboard(items)
+    session = create_callback_session(user_id=context._user_id if hasattr(context, "_user_id") else 0, expected_node="inventory", expected_state="listing")
+    context.user_data["inventory_session_token"] = str(session["session_token"])
+    keyboard = _build_search_keyboard(items, context.user_data["inventory_session_token"])
     await _send_message(target, message, reply_markup=keyboard)
 
 
@@ -141,17 +145,20 @@ async def _show_edit_menu(query, context: ContextTypes.DEFAULT_TYPE, item_id: in
         await query.edit_message_text(messages.INVENTORY_USE_AGAIN)
         return
     context.user_data["inventory_item_id"] = item_id
-    await query.edit_message_text(_format_detail(item), reply_markup=_build_edit_menu(item_id))
+    token = context.user_data.get("inventory_session_token", "")
+    await query.edit_message_text(_format_detail(item), reply_markup=_build_edit_menu(item_id, token))
 
 
 @require_auth
 async def start_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context._user_id = update.effective_user.id
     await update.message.reply_text(messages.INVENTORY_SEARCH_PROMPT)
     return SEARCHING
 
 
 @require_auth
 async def handle_inventory_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context._user_id = update.effective_user.id
     query = (update.message.text or "").strip()
     if not query:
         await update.message.reply_text(messages.INVENTORY_QUERY_INVALID)
@@ -169,7 +176,9 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
         await query.answer()
     except BadRequest:
         pass
-    data = query.data or ""
+    ok, data = await validate_callback_or_reject(update, context, expected_node="inventory")
+    if not ok:
+        return ConversationHandler.END
 
     if data.startswith("inventory_item:"):
         item_id = int(data.split(":")[1])
@@ -223,7 +232,8 @@ async def handle_inventory_callback(update: Update, context: ContextTypes.DEFAUL
         except Exception as exc:
             await query.edit_message_text(messages.INVENTORY_SYNC_ERROR.format(error=str(exc)))
             return LISTING
-        await query.edit_message_text(messages.INVENTORY_SYNC_SUCCESS, reply_markup=_build_edit_menu(item_id))
+        token = context.user_data.get("inventory_session_token", "")
+        await query.edit_message_text(messages.INVENTORY_SYNC_SUCCESS, reply_markup=_build_edit_menu(item_id, token))
         return LISTING
 
     return LISTING

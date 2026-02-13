@@ -20,7 +20,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = messages.START_MESSAGE.format(first_name=escape_markdown_v2(user.first_name))
     is_authed = await run_blocking(auth_manager.is_authenticated, user.id)
     if is_authed:
-        prompt, menu_markup = build_inline_menu("main")
+        prompt, menu_markup = build_inline_menu("main", user_id=user.id)
+        context.user_data["active_menu_id"] = "main"
         await update.message.reply_text(message, parse_mode="MarkdownV2")
         await update.message.reply_text(prompt, reply_markup=menu_markup)
     else:
