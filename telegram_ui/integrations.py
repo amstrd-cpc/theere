@@ -5,6 +5,8 @@ from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
 from db.connection import get_inventory_db
+from services.channel_sync_service import reconcile_channel_stock
+from services.discogs_sync_service import sync_all_discogs
 from services.runtime import run_blocking
 from services.store_service import get_default_store, get_store_settings, update_store_settings
 from services.sync_engine import SyncEngine
@@ -88,6 +90,47 @@ def _discogs_keyboard(settings: dict, connected: bool) -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(buttons)
+
+
+def _sync_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Run Woo sync now", callback_data="integrations:sync:woo_run")],
+            [
+                InlineKeyboardButton("Reconcile Woo", callback_data="integrations:sync:woo_reconcile"),
+                InlineKeyboardButton("Reconcile Discogs", callback_data="integrations:sync:discogs_reconcile"),
+            ],
+            [InlineKeyboardButton("Sync all Discogs", callback_data="integrations:sync:discogs_all")],
+            [
+                InlineKeyboardButton("Woo settings", callback_data="integrations:sync:open_woo"),
+                InlineKeyboardButton("Discogs settings", callback_data="integrations:sync:open_discogs"),
+            ],
+            [InlineKeyboardButton("Refresh sync status", callback_data="integrations:sync:status")],
+        ]
+    )
+
+
+def _format_sync_menu(store: dict, settings: dict) -> str:
+    return (
+        "🔄 Sync Menu\n"
+        f"• Woo periodic: {_bool_label(settings.get('woo_sync_enabled'))}\n"
+        f"• Woo instant: {_bool_label(settings.get('woo_instant_sync_enabled'))}\n"
+        f"• Discogs collection: {_bool_label(settings.get('discogs_collection_sync_enabled'))}\n"
+        f"• Discogs listings: {_bool_label(settings.get('discogs_listings_enabled'))}\n"
+        f"• Three-way sync: {_bool_label(settings.get('three_way_sync_enabled'))}\n"
+        f"• Discogs connected: {_bool_label(bool(store.get('discogs_token')), on='YES', off='NO')}"
+    )
+
+
+@require_auth
+@require_admin
+async def sync_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = get_default_store()
+    if not store:
+        await update.message.reply_text("❌ No store configured. Run /setup_woo first.")
+        return
+    settings = get_store_settings(int(store["id"]))
+    await update.message.reply_text(_format_sync_menu(store, settings), reply_markup=_sync_keyboard())
 
 
 def _format_woo_status(store_id: int, settings: dict) -> str:
@@ -309,6 +352,46 @@ async def handle_integrations_callback(update: Update, context: ContextTypes.DEF
                 raise
         return
 
+    if section == "sync":
+        if action == "woo_run":
+            await run_blocking(SyncEngine().run_manual_sync, store_id)
+        elif action == "woo_reconcile":
+            await run_blocking(reconcile_channel_stock, store_id, channel="woo")
+        elif action == "discogs_reconcile":
+            await run_blocking(reconcile_channel_stock, store_id, channel="discogs")
+        elif action == "discogs_all":
+            await run_blocking(sync_all_discogs, store_id, publish_missing=True)
+        elif action == "open_woo":
+            try:
+                await query.edit_message_text(_format_woo_status(store_id, settings), reply_markup=_woo_keyboard(settings))
+            except BadRequest as exc:
+                if "Message is not modified" not in str(exc):
+                    raise
+            return
+        elif action == "open_discogs":
+            connected = bool(store.get("discogs_token"))
+            try:
+                await query.edit_message_text(
+                    _format_discogs_status(store, settings),
+                    reply_markup=_discogs_keyboard(settings, connected),
+                )
+            except BadRequest as exc:
+                if "Message is not modified" not in str(exc):
+                    raise
+            return
+
+        settings = get_store_settings(store_id)
+        refreshed_store = get_default_store() or store
+        try:
+            await query.edit_message_text(
+                _format_sync_menu(refreshed_store, settings),
+                reply_markup=_sync_keyboard(),
+            )
+        except BadRequest as exc:
+            if "Message is not modified" not in str(exc):
+                raise
+        return
+
     if section == "discogs":
         if action == "toggle" and len(data) == 4:
             key = data[3]
@@ -330,6 +413,7 @@ def create_integrations_handlers() -> list:
     return [
         CommandHandler("integrations_woo", integrations_woo),
         CommandHandler("integrations_discogs", integrations_discogs),
+        CommandHandler("sync", sync_menu),
         CommandHandler("sync_status", sync_status),
         CommandHandler("backups", backups_status),
         CallbackQueryHandler(handle_integrations_callback, pattern=r"^integrations:"),

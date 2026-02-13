@@ -270,6 +270,97 @@ def sync_all_discogs(store_id: int, *, publish_missing: bool) -> Dict[str, int]:
     return results
 
 
+def sync_discogs_item(store_id: int, internal_product_id: int) -> Dict[str, int]:
+    store = get_store(store_id)
+    if not store:
+        return {"errors": 1}
+
+    item = next((row for row in get_all_inventory() if int(row.get("id") or 0) == internal_product_id), None)
+    if not item:
+        return {"errors": 1}
+
+    settings = get_store_settings(store_id)
+    sync_price = bool(settings.get("discogs_price_sync"))
+    listings_enabled = bool(settings.get("discogs_listings_enabled"))
+    collection_enabled = bool(settings.get("discogs_collection_sync_enabled"))
+    mapping = find_mapping_by_internal_id(store_id, internal_product_id)
+
+    results = {
+        "collection_added": 0,
+        "collection_skipped": 0,
+        "collection_failed": 0,
+        "listing_updated": 0,
+        "listing_published": 0,
+        "listing_failed": 0,
+        "skipped_missing": 0,
+        "skipped_no_release": 0,
+        "errors": 0,
+    }
+
+    release_id = item.get("discogs_release_id")
+    if collection_enabled:
+        if release_id:
+            try:
+                instances = fetch_collection_release_instances(store, int(release_id))
+                current_count = len(instances.get("releases") or [])
+                desired_count = max(1, int(item.get("quantity") or 0))
+                missing = max(0, desired_count - current_count)
+                for _ in range(missing):
+                    add_to_collection(store, int(release_id))
+                    results["collection_added"] += 1
+                if missing == 0:
+                    results["collection_skipped"] += 1
+            except Exception:
+                logger.exception("Failed syncing Discogs collection for inventory %s", internal_product_id)
+                results["collection_failed"] += 1
+                results["errors"] += 1
+        else:
+            results["skipped_no_release"] += 1
+
+    if listings_enabled:
+        listing_id = mapping.get("discogs_listing_id") if mapping else None
+        quantity = int(item.get("quantity") or 0)
+        price = float(item.get("price_gel") or 0)
+        if listing_id:
+            try:
+                update_listing_quantity(store, int(listing_id), quantity)
+                if sync_price:
+                    update_listing(store, int(listing_id), {"price": f"{price:.2f}"})
+                results["listing_updated"] += 1
+            except Exception:
+                logger.exception("Failed updating Discogs listing %s", listing_id)
+                results["listing_failed"] += 1
+                results["errors"] += 1
+        else:
+            if not _has_listing_fields(item):
+                results["skipped_missing"] += 1
+            else:
+                payload = _listing_payload_from_item(item)
+                try:
+                    listing = create_listing(store, payload)
+                    listing_id = listing.get("id")
+                    if listing_id:
+                        upsert_product_map(
+                            store_id=store_id,
+                            internal_product_id=internal_product_id,
+                            discogs_listing_id=int(listing_id),
+                            discogs_release_id=int(item.get("discogs_release_id")),
+                        )
+                        results["listing_published"] += 1
+                    else:
+                        results["listing_failed"] += 1
+                        results["errors"] += 1
+                except Exception:
+                    logger.exception("Failed publishing Discogs listing for inventory %s", internal_product_id)
+                    results["listing_failed"] += 1
+                    results["errors"] += 1
+
+    if results["collection_added"] or results["listing_updated"] or results["listing_published"]:
+        update_discogs_sync_time(store_id)
+
+    return results
+
+
 def _discogs_orders_processed(order_id: int) -> bool:
     with get_inventory_db() as conn:
         cur = conn.execute("SELECT 1 FROM discogs_orders WHERE order_id = ?", (order_id,))

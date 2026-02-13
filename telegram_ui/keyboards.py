@@ -4,6 +4,7 @@ from telegram import KeyboardButton, ReplyKeyboardMarkup
 
 MAIN_MENU_SHOP = "Shop"
 MAIN_MENU_INTEGRATIONS = "Integrations"
+MAIN_MENU_SYNC = "Sync"
 MAIN_MENU_SYNC_STATUS = "Sync Status"
 MAIN_MENU_BACKUPS = "Backups"
 MAIN_MENU_SETTINGS = "Settings"
@@ -11,6 +12,7 @@ MAIN_MENU_SETTINGS = "Settings"
 BACK_TO_MAIN = "⬅️ Back to Main"
 BACK_TO_SHOP = "⬅️ Back to Shop"
 BACK_TO_INTEGRATIONS = "⬅️ Back to Integrations"
+BACK_TO_SYNC = "⬅️ Back to Sync"
 BACK_TO_SETTINGS = "⬅️ Back to Settings"
 
 SHOP_MENU_INVENTORY_ACTIONS = "Inventory Actions"
@@ -29,6 +31,7 @@ SHOP_MENU_MONTHLY = "Monthly Report"
 
 INTEGRATIONS_MENU_WOO = "WooCommerce"
 INTEGRATIONS_MENU_DISCOGS = "Discogs"
+SYNC_MENU_OPEN = "Sync Controls"
 
 DISCOGS_MENU_CONNECT = "Connect Discogs"
 DISCOGS_MENU_STATUS = "Discogs Status"
@@ -54,7 +57,8 @@ def build_main_menu(authenticated: bool) -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(MAIN_MENU_SHOP), KeyboardButton(MAIN_MENU_INTEGRATIONS)],
-        [KeyboardButton(MAIN_MENU_SYNC_STATUS), KeyboardButton(MAIN_MENU_BACKUPS)],
+        [KeyboardButton(MAIN_MENU_SYNC), KeyboardButton(MAIN_MENU_SYNC_STATUS)],
+        [KeyboardButton(MAIN_MENU_BACKUPS)],
         [KeyboardButton(MAIN_MENU_SETTINGS)],
         [KeyboardButton(SETTINGS_MENU_CANCEL)],
     ]
@@ -153,5 +157,15 @@ def build_settings_support_menu() -> ReplyKeyboardMarkup:
         [KeyboardButton(SETTINGS_MENU_HELP), KeyboardButton(SETTINGS_MENU_START)],
         [KeyboardButton(SETTINGS_MENU_CANCEL)],
         [KeyboardButton(BACK_TO_SETTINGS)],
+    ]
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+
+
+def build_sync_menu() -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton(SYNC_MENU_OPEN), KeyboardButton(MAIN_MENU_SYNC_STATUS)],
+        [KeyboardButton(MAIN_MENU_BACKUPS)],
+        [KeyboardButton(SETTINGS_MENU_CANCEL)],
+        [KeyboardButton(BACK_TO_MAIN)],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)

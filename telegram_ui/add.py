@@ -12,7 +12,8 @@ from telegram.error import BadRequest
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from services import discogs_service
-from services.store_service import get_default_store
+from services.discogs_sync_service import sync_discogs_item
+from services.store_service import get_default_store, get_store_settings
 from services.inventory_service import (
     get_or_create_supplier,
     get_suppliers,
@@ -23,6 +24,7 @@ from services.inventory_service import (
 from services.product_map_service import find_mapping_by_internal_id, upsert_product_map
 from services.runtime import run_blocking
 from services.sync_engine import SyncEngine
+from services.tri_sync_service import poll_discogs_listings, poll_woo_products
 from services.woo_service import (
     WooNotConfigured,
     category_names_from_inventory,
@@ -438,40 +440,68 @@ async def handle_supplier_input(update: Update, context: ContextTypes.DEFAULT_TY
             "supplier_name": supplier_name,
         })
 
-        try:
-            store = context.user_data.get("store")
-            if store:
-                await run_blocking(SyncEngine().run_instant_sync_for_item, int(store["id"]), int(inventory_id))
-                mapping = await run_blocking(find_mapping_by_internal_id, int(store["id"]), int(inventory_id))
-            else:
-                mapping = None
-        except WooNotConfigured:
-            await update.effective_message.reply_text(messages.ADD_WOO_NOT_CONFIGURED)
-        except Exception as exc:
-            logger.exception("Woo sync failed")
-            await update.effective_message.reply_text(
-                messages.ADD_WOO_FAILED.format(error=f"{type(exc).__name__}: {exc}")
-            )
-        else:
-            woo_id = mapping.get("woo_product_id") if mapping else None
-            category_names = ", ".join(category_names_from_inventory(inventory_row))
-            if woo_id:
-                await update.effective_message.reply_text(
-                    messages.ADD_WOO_OK_DETAILS.format(
-                        inventory_id=inventory_id,
-                        woo_id=woo_id,
-                        categories=category_names or "N/A",
-                    )
-                )
-            else:
-                await update.effective_message.reply_text(
-                    messages.ADD_SAVED_LOCAL.format(inventory_id=inventory_id)
-                )
+        await _run_post_add_sync(
+            update,
+            store=context.user_data.get("store"),
+            inventory_id=int(inventory_id),
+            inventory_row=inventory_row,
+        )
     except Exception as exc:
         logger.exception("Error saving inventory row")
         await update.effective_message.reply_text(messages.ADD_SAVE_ERROR.format(error=str(exc)))
 
     return ConversationHandler.END
+
+
+async def _run_post_add_sync(
+    update: Update,
+    *,
+    store: dict | None,
+    inventory_id: int,
+    inventory_row: dict[str, Any],
+) -> None:
+    if not store:
+        return
+
+    store_id = int(store["id"])
+    mapping = None
+    try:
+        await run_blocking(SyncEngine().run_instant_sync_for_item, store_id, int(inventory_id))
+        mapping = await run_blocking(find_mapping_by_internal_id, store_id, int(inventory_id))
+    except WooNotConfigured:
+        await update.effective_message.reply_text(messages.ADD_WOO_NOT_CONFIGURED)
+    except Exception as exc:
+        logger.exception("Woo sync failed")
+        await update.effective_message.reply_text(
+            messages.ADD_WOO_FAILED.format(error=f"{type(exc).__name__}: {exc}")
+        )
+    else:
+        woo_id = mapping.get("woo_product_id") if mapping else None
+        category_names = ", ".join(category_names_from_inventory(inventory_row))
+        if woo_id:
+            await update.effective_message.reply_text(
+                messages.ADD_WOO_OK_DETAILS.format(
+                    inventory_id=inventory_id,
+                    woo_id=woo_id,
+                    categories=category_names or "N/A",
+                )
+            )
+
+    try:
+        results = await run_blocking(sync_discogs_item, store_id, int(inventory_id))
+        if results.get("errors"):
+            logger.warning("Discogs immediate sync completed with errors for inventory %s", inventory_id)
+    except Exception:
+        logger.exception("Discogs immediate sync failed for inventory %s", inventory_id)
+
+    settings = await run_blocking(get_store_settings, store_id)
+    if settings.get("three_way_sync_enabled"):
+        try:
+            await run_blocking(poll_woo_products, store_id)
+            if store.get("discogs_token"):
+                await run_blocking(poll_discogs_listings, store_id)
+        except Exception:
+            logger.exception("Three-way sync poll failed after add for inventory %s", inventory_id)
 
 
 async def handle_other_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -643,35 +673,12 @@ async def _finalize_other_item(update: Update, context: ContextTypes.DEFAULT_TYP
         if cover_url:
             await run_blocking(update_inventory_fields, inventory_id, {"cover_url": cover_url})
 
-        try:
-            store = context.user_data.get("store")
-            if store:
-                await run_blocking(SyncEngine().run_instant_sync_for_item, int(store["id"]), int(inventory_id))
-                mapping = await run_blocking(find_mapping_by_internal_id, int(store["id"]), int(inventory_id))
-            else:
-                mapping = None
-        except WooNotConfigured:
-            await update.effective_message.reply_text(messages.ADD_WOO_NOT_CONFIGURED)
-        except Exception as exc:
-            logger.exception("Woo sync failed")
-            await update.effective_message.reply_text(
-                messages.ADD_WOO_FAILED.format(error=f"{type(exc).__name__}: {exc}")
-            )
-        else:
-            woo_id = mapping.get("woo_product_id") if mapping else None
-            category_names = ", ".join(category_names_from_inventory(inventory_row))
-            if woo_id:
-                await update.effective_message.reply_text(
-                    messages.ADD_WOO_OK_DETAILS.format(
-                        inventory_id=inventory_id,
-                        woo_id=woo_id,
-                        categories=category_names or "N/A",
-                    )
-                )
-            else:
-                await update.effective_message.reply_text(
-                    messages.ADD_SAVED_LOCAL.format(inventory_id=inventory_id)
-                )
+        await _run_post_add_sync(
+            update,
+            store=context.user_data.get("store"),
+            inventory_id=int(inventory_id),
+            inventory_row=inventory_row,
+        )
     except Exception as exc:
         logger.exception("Error saving other inventory row")
         await update.effective_message.reply_text(messages.ADD_SAVE_ERROR.format(error=str(exc)))
