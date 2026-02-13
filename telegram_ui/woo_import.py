@@ -3,7 +3,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
-from services.runtime import run_blocking
+from services.runtime import ServiceTimeoutError, run_blocking
 from services.store_service import get_default_store
 from services.woo_import_service import get_latest_import_summary, import_woo_products
 from telegram_ui.auth import require_admin, require_auth
@@ -64,7 +64,11 @@ async def handle_woo_import_callback(update: Update, context: ContextTypes.DEFAU
         return
 
     await query.edit_message_text("🔄 Running Woo import...")
-    summary = await run_blocking(import_woo_products, store_id=int(store["id"]), notify=True)
+    try:
+        summary = await run_blocking(import_woo_products, store_id=int(store["id"]), notify=True, timeout=300.0)
+    except ServiceTimeoutError:
+        await query.edit_message_text("⚠️ Woo import is taking too long. Please retry or reduce catalog size.")
+        return
     await query.edit_message_text(
         "✅ Woo import complete.\n"
         f"• created: {summary.get('created', 0)}\n"

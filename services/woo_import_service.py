@@ -18,7 +18,7 @@ from services.product_map_service import (
     resolve_import_decision,
     upsert_product_map,
 )
-from services.store_service import get_store
+from services.store_service import get_default_store, get_store
 from services.woo_service import WooNotConfigured, fetch_products_page, is_configured
 
 logger = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ def _process_product(*, store_id: int, product: Dict[str, Any], summary: ImportS
 
     payload = _inventory_from_woo(product)
     updates: Dict[str, Any] = {}
-    for field in ("artist_album", "label", "format", "condition", "price_gel", "quantity", "year", "description", "cover_url"):
+    for field in ("artist_album", "label", "format", "condition", "price_gel", "quantity", "year", "description", "cover_url", "supplier_id"):
         new_value = payload.get(field)
         if new_value is None:
             continue
@@ -200,14 +200,14 @@ def import_woo_products(*, store_id: int | None = None, per_page: int = 100, not
     if not is_configured(store_id):
         raise WooNotConfigured("WooCommerce not configured")
 
-    store = get_store(store_id)
+    store = get_store(store_id) if store_id is not None else get_default_store()
     if not store:
         raise WooNotConfigured("WooCommerce store not configured")
 
     summary = ImportSummary()
     page = 1
     while True:
-        products = fetch_products_page(page=page, per_page=per_page, store=store, store_id=store_id)
+        products = fetch_products_page(page=page, per_page=per_page, store=store, store_id=int(store["id"]))
         if not products:
             break
         for product in products:

@@ -92,3 +92,83 @@ def test_import_woo_products_manual_queue(monkeypatch):
         summary = woo_import_service.import_woo_products(store_id=store_id)
         assert summary["manual_needed"] == 1
         assert summary["created"] == 0
+
+
+def test_import_woo_products_uses_default_store_when_store_id_omitted(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "clime_db.db")
+        monkeypatch.setenv("RECORDSTORE_DB_FILE", db_path)
+        migrate()
+
+        store_id = _seed_store()
+        monkeypatch.setattr(inventory_service, "_inventory_sequence_checked", True)
+        item_id = insert_inventory(
+            {
+                "artist_album": "Artist - Album",
+                "label": "LabelX",
+                "format": "Vinyl",
+                "condition": "VG+",
+                "price_gel": 10.0,
+                "quantity": 1,
+            }
+        )
+        upsert_product_map(store_id=store_id, internal_product_id=item_id, woo_product_id=301, sku="SKU-301")
+
+        product = {
+            "id": 301,
+            "sku": "SKU-301",
+            "name": "Artist - Album",
+            "stock_quantity": 2,
+            "regular_price": "11.0",
+            "short_description": "Label: LabelX",
+            "description": "",
+            "images": [],
+        }
+
+        monkeypatch.setattr(woo_import_service, "is_configured", lambda *_: True)
+        monkeypatch.setattr(woo_import_service, "fetch_products_page", lambda **_: [product])
+
+        summary = woo_import_service.import_woo_products()
+        assert summary["updated"] == 1
+
+
+def test_import_woo_products_updates_supplier_id(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "clime_db.db")
+        monkeypatch.setenv("RECORDSTORE_DB_FILE", db_path)
+        migrate()
+
+        store_id = _seed_store()
+        monkeypatch.setattr(inventory_service, "_inventory_sequence_checked", True)
+        item_id = insert_inventory(
+            {
+                "artist_album": "Artist - Album",
+                "label": "LabelX",
+                "format": "Vinyl",
+                "condition": "VG+",
+                "price_gel": 10.0,
+                "quantity": 1,
+            }
+        )
+        upsert_product_map(store_id=store_id, internal_product_id=item_id, woo_product_id=401, sku="SKU-401")
+
+        product = {
+            "id": 401,
+            "sku": "SKU-401",
+            "name": "Artist - Album",
+            "stock_quantity": 1,
+            "regular_price": "10",
+            "short_description": "Label: LabelX\nSupplier: New Supplier",
+            "description": "",
+            "images": [],
+        }
+
+        monkeypatch.setattr(woo_import_service, "is_configured", lambda *_: True)
+        monkeypatch.setattr(woo_import_service, "fetch_products_page", lambda **_: [product])
+
+        summary = woo_import_service.import_woo_products(store_id=store_id)
+        updated = get_inventory_by_id(item_id)
+
+        assert summary["updated"] == 1
+        assert updated is not None
+        assert updated.get("supplier_id") is not None
