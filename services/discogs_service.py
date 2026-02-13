@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import requests
+from tenacity import RetryError
 
 from services.discogs_client import DiscogsClient
 
@@ -37,7 +38,23 @@ def fetch_release(store: Dict[str, Any], release_id: int) -> Dict[str, Any]:
 
 def fetch_price_suggestions(store: Dict[str, Any], release_id: int) -> Dict[str, Any]:
     client = _client(store)
-    return client.get(f"/marketplace/price_suggestions/{release_id}")
+    path = f"/marketplace/price_suggestions/{release_id}"
+    try:
+        return client.get(path)
+    except requests.HTTPError as exc:
+        response = exc.response
+        if response is not None and response.status_code == 404:
+            logger.info("No Discogs price suggestions available for release %s", release_id)
+            return {}
+        raise
+    except RetryError as exc:
+        cause = exc.__cause__
+        if isinstance(cause, requests.HTTPError):
+            response = cause.response
+            if response is not None and response.status_code == 404:
+                logger.info("No Discogs price suggestions available for release %s", release_id)
+                return {}
+        raise
 
 
 def get_identity(store: Dict[str, Any]) -> Dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import datetime
 
 from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, filters
@@ -100,7 +101,14 @@ BACK_TARGETS = {
 
 
 def _build_command_update(update: Update, command: str, bot) -> Update:
-    message = update.message.to_dict() if update.message else {}
+    source_message = update.message
+    message = source_message.to_dict() if source_message else {}
+    if source_message and source_message.from_user:
+        message["from"] = source_message.from_user.to_dict()
+    if source_message and source_message.chat:
+        message["chat"] = source_message.chat.to_dict()
+    message.setdefault("message_id", source_message.message_id if source_message else 0)
+    message["date"] = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     message["text"] = command
     message["entities"] = [{"type": "bot_command", "offset": 0, "length": len(command)}]
     payload = {"update_id": update.update_id, "message": message}
