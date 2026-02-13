@@ -221,6 +221,22 @@ def _latest_tri_sync_run(store_id: int, run_type: str) -> dict | None:
         return dict(row) if row else None
 
 
+
+
+def _latest_woo_import_run(store_id: int) -> dict | None:
+    with get_inventory_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM woo_import_runs
+            WHERE store_id = ?
+            ORDER BY ts_started DESC
+            LIMIT 1
+            """,
+            (store_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
 def _latest_backup(backup_type: str) -> dict | None:
     with get_inventory_db() as conn:
         cur = conn.execute(
@@ -259,6 +275,7 @@ async def sync_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     webhook_processed = webhook["last_processed"] if webhook and webhook["last_processed"] else "never"
     tri_discogs = _latest_tri_sync_run(store_id, "discogs")
     tri_woo = _latest_tri_sync_run(store_id, "woo")
+    woo_import = _latest_woo_import_run(store_id)
     counts = (
         f"Pushed: {periodic.get('pushed_count', 0)}, "
         f"Pulled: {periodic.get('pulled_count', 0)}, "
@@ -296,6 +313,8 @@ async def sync_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"• Webhook last processed: {webhook_processed}\n"
         f"• Three-way Discogs: {tri_discogs.get('ts_finished') if tri_discogs else 'never'} ({tri_discogs_counts})\n"
         f"• Three-way Woo: {tri_woo.get('ts_finished') if tri_woo else 'never'} ({tri_woo_counts})\n"
+        f"• Last Woo import: {woo_import.get('ts_finished') if woo_import else 'never'}\n"
+        f"• Woo import counts: created={woo_import.get('created_count', 0) if woo_import else 0}, updated={woo_import.get('updated_count', 0) if woo_import else 0}, skipped={woo_import.get('skipped_count', 0) if woo_import else 0}, conflicts={woo_import.get('conflict_count', 0) if woo_import else 0}, manual_needed={woo_import.get('manual_needed_count', 0) if woo_import else 0}\n"
         "• Queue length: 0\n"
         f"• Last periodic counts: {counts}\n"
         f"• Last error: {last_error}\n"

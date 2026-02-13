@@ -12,5 +12,6 @@ MENU = MenuDefinition(
         command_button("🧹 Maintenance Backups", "/backups"),
         command_button("🛠️ Maintenance Repair Webhooks", "/repair_webhooks"),
         command_button("🏪 Integrations: Discogs", "/integrations_discogs"),
+        command_button("📦 Import Woo Products", "/import_woo"),
     ),
 )

@@ -10,6 +10,8 @@ MENU = MenuDefinition(
         command_button("🛠️ Repair Webhooks", "/repair_webhooks"),
         command_button("🧩 Map Products", "/map_woo"),
         command_button("🤖 Auto Map", "/auto_map_woo"),
+        command_button("📦 Import Woo Products", "/import_woo"),
+        command_button("🧾 Import Summary", "/woo_import_summary"),
         command_button("🏪 Integrations: Woo", "/integrations_woo"),
     ),
 )
