@@ -20,7 +20,7 @@ from services.inventory_service import (
     get_inventory_by_id,
     update_inventory_fields,
 )
-from services.product_map_service import find_mapping_by_internal_id
+from services.product_map_service import find_mapping_by_internal_id, upsert_product_map
 from services.runtime import run_blocking
 from services.sync_engine import SyncEngine
 from services.woo_service import (
