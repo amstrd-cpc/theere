@@ -63,6 +63,7 @@ CATALOG_COMMANDS: set[str] = {
     "/help",
     "/integrations_discogs",
     "/integrations_woo",
+    "/import_woo",
     "/inventory",
     "/link_discogs",
     "/login",
@@ -93,6 +94,7 @@ CATALOG_COMMANDS: set[str] = {
     "/update_discogs_listing",
     "/users",
     "/weekly",
+    "/woo_import_summary",
 }
 
 

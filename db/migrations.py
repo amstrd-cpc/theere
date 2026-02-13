@@ -47,7 +47,7 @@ SALES_COLUMNS = {
 }
 
 
-LATEST_VERSION = 7
+LATEST_VERSION = 8
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -314,6 +314,53 @@ def _create_woo_tables(conn: sqlite3.Connection) -> None:
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_product_map_store_sku
         ON product_map(store_id, sku)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_mapping_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            woo_product_id INTEGER NOT NULL,
+            woo_sku TEXT,
+            woo_name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason TEXT,
+            payload_json TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE (store_id, woo_product_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_map_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            woo_product_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            reason TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE (store_id, woo_product_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS woo_import_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            ts_started TEXT NOT NULL,
+            ts_finished TEXT,
+            created_count INTEGER DEFAULT 0,
+            updated_count INTEGER DEFAULT 0,
+            skipped_count INTEGER DEFAULT 0,
+            conflict_count INTEGER DEFAULT 0,
+            manual_needed_count INTEGER DEFAULT 0,
+            summary_json TEXT
+        )
         """
     )
     conn.execute(
@@ -598,6 +645,10 @@ def migrate() -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_sessions_expires_at ON ui_sessions(expires_at)")
             _set_version(conn, 7)
             current_version = 7
+        if current_version < 8:
+            _create_woo_tables(conn)
+            _set_version(conn, 8)
+            current_version = 8
         conn.commit()
 
     with get_sales_db() as conn:

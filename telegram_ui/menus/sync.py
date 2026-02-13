@@ -11,5 +11,6 @@ MENU = MenuDefinition(
         command_button("🧮 Reconcile Woo", "/reconcile_woo"),
         command_button("🪄 Discogs Refresh", "/discogs_refresh"),
         command_button("🚀 Sync Discogs All", "/sync_discogs_all"),
+        command_button("📦 Import Woo Products", "/import_woo"),
     ),
 )

@@ -31,6 +31,7 @@ from telegram_ui.reports import daily_report, monthly_report, report_handler, we
 from telegram_ui.sales import start_sell_flow
 from telegram_ui.store_settings import create_settings_handler
 from telegram_ui.woo_setup import create_repair_handler, create_setup_handler
+from telegram_ui.woo_import import create_woo_import_handlers
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -179,6 +180,8 @@ def main() -> None:
     for handler in create_integrations_handlers():
         application.add_handler(handler)
     for handler in create_bootstrap_handlers():
+        application.add_handler(handler)
+    for handler in create_woo_import_handlers():
         application.add_handler(handler)
 
     application.add_handler(start_add_flow())
