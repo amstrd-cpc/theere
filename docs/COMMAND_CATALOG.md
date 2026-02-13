@@ -115,3 +115,51 @@ Inventory of every `CommandHandler(...)` declaration in `bot.py` and `telegram_u
 | `telegram_ui/woo_setup.py` | 147 | `/connect` | `start_setup` |
 | `telegram_ui/woo_setup.py` | 154 | `/cancel` | `cancel_setup` |
 | `telegram_ui/woo_setup.py` | 161 | `/repair_webhooks` | `repair_webhooks` |
+## Menu mapping (inline navigation)
+
+| Command | Menu button(s) |
+|---|---|
+| `/add` | inventory:➕ Add Record |
+| `/auto_map_woo` | woo:🤖 Auto Map |
+| `/backups` | sync:💾 Backups |
+| `/cancel` | misc:🧯 Cancel Current Flow |
+| `/collect_discogs` | discogs:📥 Collect Discogs |
+| `/collect_discogs_selection` | discogs:📥 Collect Selection |
+| `/connect` | woo:🔌 Connect Woo |
+| `/connect_discogs` | discogs:🔌 Connect Discogs |
+| `/daily` | reports:📆 Daily |
+| `/discogs_refresh` | sync:🪄 Discogs Refresh |
+| `/discogs_status` | discogs:📊 Discogs Status |
+| `/help` | settings:❓ Help |
+| `/integrations_discogs` | misc:🏪 Integrations: Discogs |
+| `/integrations_woo` | woo:🏪 Integrations: Woo |
+| `/inventory` | inventory:📦 View Inventory |
+| `/link_discogs` | discogs:🔗 Link Discogs |
+| `/login` | settings:🔐 Login |
+| `/logout` | settings:🚪 Logout |
+| `/map_woo` | woo:🧩 Map Products |
+| `/monthly` | reports:🗓️ Monthly |
+| `/orders` | sales:📬 Orders |
+| `/publish_discogs` | discogs:📤 Publish Discogs |
+| `/publish_discogs_all` | discogs:📤 Publish All |
+| `/publish_discogs_selection` | discogs:📤 Publish Selection |
+| `/reconcile_discogs` | sync:🧮 Reconcile Discogs |
+| `/reconcile_woo` | sync:🧮 Reconcile Woo |
+| `/relist_discogs` | discogs:♻️ Relist |
+| `/remove_discogs_listing` | discogs:🗑️ Remove Listing |
+| `/repair_webhooks` | woo:🛠️ Repair Webhooks |
+| `/reports` | reports:📈 Reports Home |
+| `/sales` | sales:🧾 Recent Sales |
+| `/sell` | sales:💸 Sell |
+| `/settings` | settings:⚙️ Settings |
+| `/setup_woo` | woo:🧰 Setup Woo |
+| `/start` | misc:🧪 Bootstrap /start |
+| `/status` | settings:📡 Status |
+| `/stock` | inventory:📉 Low Stock |
+| `/sync_discogs_all` | sync:🚀 Sync Discogs All |
+| `/sync_status` | sync:🔄 Sync Status |
+| `/unlink_discogs` | discogs:🔓 Unlink Discogs |
+| `/unlist_discogs` | discogs:🛑 Unlist |
+| `/update_discogs_listing` | discogs:📝 Update Listing |
+| `/users` | admin:👥 Users |
+| `/weekly` | reports:🗓️ Weekly |

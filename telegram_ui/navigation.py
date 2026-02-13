@@ -10,7 +10,7 @@ from config.settings import load_settings
 from services.runtime import run_blocking
 from services.store_service import get_default_store
 from telegram_ui.callback_contract import NavigationCallback, parse_navigation_callback
-from telegram_ui.menu_registry import ROOT_MENU_ID, get_menu_definition
+from telegram_ui.menus.main import build_inline_menu, get_command_target, get_menu
 
 
 async def _is_navigation_router_enabled() -> bool:
@@ -59,24 +59,31 @@ async def _dispatch_callback_target(
     context: ContextTypes.DEFAULT_TYPE,
     callback: NavigationCallback,
 ) -> None:
-    definition = get_menu_definition(callback.target)
-    if not definition:
+    try:
+        if callback.action in {"menu", "back"}:
+            menu = get_menu(callback.target)
+            target_menu = menu
+            if callback.action == "back":
+                target_menu = get_menu(menu.parent_id) if menu.parent_id else get_menu("main")
+            text, markup = build_inline_menu(target_menu.menu_id)
+            await update.callback_query.edit_message_text(text=text, reply_markup=markup)
+            await update.callback_query.answer()
+            return
+
+        if callback.action == "command":
+            command = get_command_target(callback.target)
+            if not command:
+                await update.callback_query.answer("Unknown command", show_alert=False)
+                return
+            synthetic_update = _build_command_update_from_callback(update, command, context.bot)
+            await context.application.process_update(synthetic_update)
+            await update.callback_query.answer()
+            return
+    except KeyError:
         await update.callback_query.answer("Unknown menu target", show_alert=False)
         return
 
-    if callback.action == "back" and definition.parent_id:
-        parent = get_menu_definition(definition.parent_id)
-        definition = parent or definition
-    elif callback.action == "back":
-        definition = get_menu_definition(ROOT_MENU_ID) or definition
-
-    if not definition.command_target:
-        await update.callback_query.answer("Menu container selected", show_alert=False)
-        return
-
-    synthetic_update = _build_command_update_from_callback(update, definition.command_target, context.bot)
-    await context.application.process_update(synthetic_update)
-    await update.callback_query.answer()
+    await update.callback_query.answer("Unsupported callback action", show_alert=False)
 
 
 async def handle_navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
