@@ -8,6 +8,7 @@ from services.sales_service import get_recent_sales
 from services.runtime import run_blocking
 from telegram_ui import messages
 from telegram_ui.keyboards import build_main_menu
+from telegram_ui.menus import build_inline_menu
 from telegram_ui.utils import escape_markdown_v2
 from telegram_ui.auth import auth_manager
 
@@ -18,11 +19,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = messages.START_MESSAGE.format(first_name=escape_markdown_v2(user.first_name))
     is_authed = await run_blocking(auth_manager.is_authenticated, user.id)
-    await update.message.reply_text(
-        message,
-        parse_mode="MarkdownV2",
-        reply_markup=build_main_menu(is_authed),
-    )
+    if is_authed:
+        prompt, menu_markup = build_inline_menu("main")
+        await update.message.reply_text(message, parse_mode="MarkdownV2")
+        await update.message.reply_text(prompt, reply_markup=menu_markup)
+    else:
+        await update.message.reply_text(
+            message,
+            parse_mode="MarkdownV2",
+            reply_markup=build_main_menu(is_authed),
+        )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
