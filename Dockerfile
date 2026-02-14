@@ -9,4 +9,4 @@ COPY . /app
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "run.py", "bot"]
+CMD ["python", "run.py", "api"]

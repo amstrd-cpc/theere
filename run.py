@@ -13,15 +13,10 @@ from jobs.queue import get_queue
 def main() -> None:
     init_db()
     if len(sys.argv) < 2:
-        print("Usage: python run.py [bot|api|worker]")
+        print("Usage: python run.py [api|worker|cli]")
         raise SystemExit(1)
 
     mode = sys.argv[1]
-    if mode == "bot":
-        from bot import main as bot_main
-
-        bot_main()
-        return
 
     if mode == "api":
         settings = load_settings()
@@ -34,7 +29,13 @@ def main() -> None:
         worker.work()
         return
 
-    print("Unknown mode. Use bot, api, or worker.")
+    if mode == "cli":
+        from cli.app import main as cli_main
+
+        cli_main(sys.argv[2:])
+        return
+
+    print("Unknown mode. Use api, worker, or cli.")
     raise SystemExit(1)
 
 
