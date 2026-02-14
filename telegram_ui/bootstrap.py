@@ -4,9 +4,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from services.discogs_sync_service import bootstrap_collection_import
-from services.inventory_service import inventory_is_empty
 from services.runtime import run_blocking
-from services.store_service import get_default_store, get_store_settings, update_store_settings
+from services.store_service import (
+    complete_bootstrap_transition,
+    get_default_store,
+    get_store_settings,
+    transition_bootstrap_to_running,
+)
 from services.sync_engine import SyncEngine
 from telegram_ui.auth import require_admin, require_auth
 
@@ -39,28 +43,42 @@ async def handle_bootstrap_choice(update: Update, context: ContextTypes.DEFAULT_
     if settings.get("bootstrap_completed"):
         await query.edit_message_text("✅ Bootstrap already completed.")
         return
-    if not await run_blocking(inventory_is_empty):
-        await query.edit_message_text("ℹ️ Inventory already has data; bootstrap skipped.")
-        await run_blocking(update_store_settings, store_id, {"bootstrap_completed": True})
+
+    started, reason = await run_blocking(transition_bootstrap_to_running, store_id)
+    if not started:
+        message = "ℹ️ Bootstrap skipped."
+        if reason == "already_bootstrapping":
+            message = "⏳ Bootstrap already in progress."
+        elif reason == "already_completed":
+            message = "✅ Bootstrap already completed."
+        elif reason == "inventory_non_empty_requires_reset":
+            message = "🛑 Inventory is non-empty. Admin reset flow is required before re-bootstrap."
+        elif reason == "store_missing":
+            message = "❌ Store not found."
+        await query.edit_message_text(message)
         return
 
     action = (query.data or "").split(":", 1)[1] if ":" in (query.data or "") else ""
     await query.edit_message_text("🔄 Bootstrapping inventory. This may take a few minutes...")
     results = {"woo": None, "discogs": None}
-    if action in {"woo", "merge"}:
-        results["woo"] = await run_blocking(
-            SyncEngine().reconcile_catalog,
-            store_id,
-            initial_load=True,
-            timeout=300.0,
-        )
-    if action in {"discogs", "merge"}:
-        results["discogs"] = await run_blocking(
-            bootstrap_collection_import,
-            store_id,
-            timeout=300.0,
-        )
-    await run_blocking(update_store_settings, store_id, {"bootstrap_completed": True})
+    success = False
+    try:
+        if action in {"woo", "merge"}:
+            results["woo"] = await run_blocking(
+                SyncEngine().reconcile_catalog,
+                store_id,
+                initial_load=True,
+                timeout=300.0,
+            )
+        if action in {"discogs", "merge"}:
+            results["discogs"] = await run_blocking(
+                bootstrap_collection_import,
+                store_id,
+                timeout=300.0,
+            )
+        success = True
+    finally:
+        await run_blocking(complete_bootstrap_transition, store_id, success=success)
 
     summary = ["✅ Bootstrap completed."]
     if results["woo"] is not None:

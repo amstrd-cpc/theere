@@ -9,7 +9,12 @@ from db.connection import get_inventory_db
 from services.discogs_service import fetch_listing, update_listing, update_listing_quantity
 from services.inventory_service import get_inventory_by_id, update_inventory_fields
 from services.product_map_service import list_product_mappings, update_product_map_fields
-from services.store_service import get_store, get_store_settings
+from services.store_service import (
+    SYNC_LIFECYCLE_STEADY_STATE,
+    get_store,
+    get_store_settings,
+    get_sync_lifecycle_state,
+)
 from services.sync_policy import NEVER_ACCEPT_FIELDS, normalize_incoming_fields
 from services.woo_service import fetch_product_by_id, update_product_by_id, update_stock
 
@@ -183,8 +188,12 @@ def poll_discogs_listings(store_id: int) -> None:
         return
     settings = get_store_settings(store_id)
     sync_price = bool(settings.get("discogs_price_sync"))
-    allow_incoming = bool(settings.get("discogs_allow_incoming"))
+    lifecycle_state = get_sync_lifecycle_state(settings)
+    allow_remote_overwrite = lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE or bool(settings.get("discogs_allow_incoming"))
+    allow_incoming = allow_remote_overwrite
     incoming_fields = normalize_incoming_fields(settings.get("discogs_incoming_fields") or [])
+    if lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE:
+        incoming_fields = incoming_fields or {"quantity", "listing_price", "price"}
     run_id = _start_tri_sync_run(store_id, "discogs")
     incoming_count = 0
     applied_count = 0
@@ -278,6 +287,10 @@ def poll_discogs_listings(store_id: int) -> None:
                 last_sync_direction=last_sync_direction,
                 last_sync_hash=last_sync_hash,
             ) or hard_conflict:
+                if not allow_remote_overwrite:
+                    drifted_count += 1
+                    logger.info("Discogs remote overwrite blocked by steady-state incoming policy for %s", internal_id)
+                    continue
                 push_success = False
                 try:
                     update_listing_quantity(store, int(listing_id), local_qty)
@@ -336,8 +349,12 @@ def poll_woo_products(store_id: int) -> None:
     if not store:
         return
     settings = get_store_settings(store_id)
-    allow_incoming = bool(settings.get("woo_allow_incoming"))
+    lifecycle_state = get_sync_lifecycle_state(settings)
+    allow_remote_overwrite = lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE or bool(settings.get("woo_allow_incoming"))
+    allow_incoming = allow_remote_overwrite
     incoming_fields = normalize_incoming_fields(settings.get("woo_incoming_fields") or [])
+    if lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE:
+        incoming_fields = incoming_fields or {"quantity", "price"}
     run_id = _start_tri_sync_run(store_id, "woo")
     incoming_count = 0
     applied_count = 0
@@ -429,6 +446,10 @@ def poll_woo_products(store_id: int) -> None:
                 last_sync_direction=last_sync_direction,
                 last_sync_hash=last_sync_hash,
             ) or hard_conflict:
+                if not allow_remote_overwrite:
+                    drifted_count += 1
+                    logger.info("Woo remote overwrite blocked by steady-state incoming policy for %s", internal_id)
+                    continue
                 push_success = False
                 try:
                     update_stock(int(product_id), local_qty, store=store)

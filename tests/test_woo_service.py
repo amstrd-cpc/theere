@@ -27,8 +27,12 @@ def test_woo_upsert_idempotency(monkeypatch):
     def fake_request(method, url, **kwargs):
         calls.append((method, url, kwargs))
         if method == "GET":
+            if "/products/categories" in url:
+                return FakeResponse([])
             return FakeResponse(products)
         if method == "POST":
+            if "/products/categories" in url:
+                return FakeResponse({"id": 999, **(kwargs.get("json") or {})})
             product = {"id": 123, **kwargs.get("json", {})}
             products.append(product)
             return FakeResponse(product)
@@ -38,6 +42,15 @@ def test_woo_upsert_idempotency(monkeypatch):
         raise AssertionError("Unexpected method")
 
     monkeypatch.setattr(woo_service.requests, "request", fake_request)
+    monkeypatch.setattr(
+        woo_service,
+        "get_default_store",
+        lambda: {
+            "store_url": "https://example.com",
+            "woo_consumer_key": "ck_test",
+            "woo_consumer_secret": "cs_test",
+        },
+    )
 
     item = {
         "id": 10,
@@ -52,5 +65,5 @@ def test_woo_upsert_idempotency(monkeypatch):
 
     assert first["id"] == 123
     assert second["id"] == 123
-    assert sum(1 for call in calls if call[0] == "POST") == 1
-    assert sum(1 for call in calls if call[0] == "PUT") == 1
+    assert sum(1 for call in calls if call[0] == "POST" and "/products/categories" not in call[1]) == 1
+    assert sum(1 for call in calls if call[0] == "PUT" and "/products/" in call[1]) == 1

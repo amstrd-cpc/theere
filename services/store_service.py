@@ -7,6 +7,15 @@ from typing import Any, Dict, List, Optional
 from config.settings import load_settings
 from db.connection import get_inventory_db
 
+SYNC_LIFECYCLE_BOOTSTRAP_PENDING = "bootstrap_pending"
+SYNC_LIFECYCLE_BOOTSTRAPPING = "bootstrapping"
+SYNC_LIFECYCLE_STEADY_STATE = "steady_state"
+SYNC_LIFECYCLE_STATES = {
+    SYNC_LIFECYCLE_BOOTSTRAP_PENDING,
+    SYNC_LIFECYCLE_BOOTSTRAPPING,
+    SYNC_LIFECYCLE_STEADY_STATE,
+}
+
 DEFAULT_SETTINGS = {
     "auto_decrement_enabled": True,
     "auto_decrement_status": "processing",
@@ -24,6 +33,8 @@ DEFAULT_SETTINGS = {
     "three_way_discogs_interval_minutes": 15,
     "three_way_woo_interval_minutes": 15,
     "bootstrap_completed": False,
+    "sync_lifecycle_state": SYNC_LIFECYCLE_BOOTSTRAP_PENDING,
+    "bootstrap_reset_armed": False,
     "woo_allow_incoming": False,
     "discogs_allow_incoming": False,
     "woo_incoming_fields": ["quantity", "price", "description", "images"],
@@ -32,6 +43,15 @@ DEFAULT_SETTINGS = {
     "verify_ssl": True,
     "nav_router_enabled": False,
 }
+
+
+def get_sync_lifecycle_state(settings: Optional[Dict[str, Any]]) -> str:
+    raw = str((settings or {}).get("sync_lifecycle_state") or "").strip().lower()
+    if raw in SYNC_LIFECYCLE_STATES:
+        return raw
+    if bool((settings or {}).get("bootstrap_completed")):
+        return SYNC_LIFECYCLE_STEADY_STATE
+    return SYNC_LIFECYCLE_BOOTSTRAP_PENDING
 
 
 def _merge_settings(raw: Optional[str]) -> Dict[str, Any]:
@@ -192,6 +212,48 @@ def update_store_settings(store_id: int, settings: Dict[str, Any]) -> Dict[str, 
         )
         conn.commit()
     return current
+
+
+def transition_bootstrap_to_running(store_id: int) -> tuple[bool, str]:
+    now = datetime.datetime.utcnow().isoformat()
+    with get_inventory_db() as conn:
+        cur = conn.execute("SELECT settings_json FROM stores WHERE id = ?", (store_id,))
+        row = cur.fetchone()
+        if not row:
+            return False, "store_missing"
+        current = _merge_settings(row[0])
+        lifecycle = get_sync_lifecycle_state(current)
+        has_inventory = conn.execute("SELECT 1 FROM inventory LIMIT 1").fetchone() is not None
+        reset_armed = bool(current.get("bootstrap_reset_armed"))
+
+        if lifecycle == SYNC_LIFECYCLE_BOOTSTRAPPING:
+            return False, "already_bootstrapping"
+        if lifecycle == SYNC_LIFECYCLE_STEADY_STATE and bool(current.get("bootstrap_completed")):
+            return False, "already_completed"
+        if has_inventory and not reset_armed:
+            return False, "inventory_non_empty_requires_reset"
+
+        current["sync_lifecycle_state"] = SYNC_LIFECYCLE_BOOTSTRAPPING
+        current["bootstrap_completed"] = False
+        current["bootstrap_reset_armed"] = False
+        conn.execute(
+            "UPDATE stores SET settings_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(current), now, store_id),
+        )
+        conn.commit()
+        return True, "ok"
+
+
+def complete_bootstrap_transition(store_id: int, *, success: bool) -> Dict[str, Any]:
+    target_state = SYNC_LIFECYCLE_STEADY_STATE if success else SYNC_LIFECYCLE_BOOTSTRAP_PENDING
+    return update_store_settings(
+        store_id,
+        {
+            "bootstrap_completed": bool(success),
+            "sync_lifecycle_state": target_state,
+            "bootstrap_reset_armed": False,
+        },
+    )
 
 
 def get_store_settings(store_id: int) -> Dict[str, Any]:

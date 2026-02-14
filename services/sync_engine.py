@@ -20,7 +20,12 @@ from services.product_map_service import (
     update_product_map_fields,
     upsert_product_map,
 )
-from services.store_service import get_store, get_store_settings
+from services.store_service import (
+    SYNC_LIFECYCLE_STEADY_STATE,
+    get_store,
+    get_store_settings,
+    get_sync_lifecycle_state,
+)
 from services.sync_policy import NEVER_ACCEPT_FIELDS, normalize_incoming_fields
 from services.woo_service import (
     compute_sync_hash,
@@ -111,8 +116,14 @@ class SyncEngine:
             return self._empty_results()
         settings = get_store_settings(store_id)
         strategy = (settings.get("woo_sync_strategy") or "lww").lower()
-        allow_incoming = bool(settings.get("woo_allow_incoming") or initial_load)
+        lifecycle_state = get_sync_lifecycle_state(settings)
         incoming_fields = normalize_incoming_fields(settings.get("woo_incoming_fields") or [])
+        if lifecycle_state == SYNC_LIFECYCLE_STEADY_STATE:
+            allow_incoming = bool(settings.get("woo_allow_incoming"))
+            effective_incoming_fields = incoming_fields
+        else:
+            allow_incoming = True
+            effective_incoming_fields = incoming_fields or {"quantity", "price", "description", "images"}
 
         results = self._empty_results()
         page = 1
@@ -128,7 +139,8 @@ class SyncEngine:
                     strategy=strategy,
                     sync_run_id=sync_run_id,
                     allow_incoming=allow_incoming,
-                    incoming_fields=incoming_fields,
+                    incoming_fields=effective_incoming_fields,
+                    lifecycle_state=lifecycle_state,
                 )
                 for key, value in item_results.items():
                     results[key] += value
@@ -147,6 +159,7 @@ class SyncEngine:
         sync_run_id: Optional[int],
         allow_incoming: bool,
         incoming_fields: set[str],
+        lifecycle_state: str,
     ) -> Dict[str, int]:
         results = self._empty_results()
         woo_id = product.get("id")
@@ -221,6 +234,9 @@ class SyncEngine:
                 )
                 results["pulled_count"] += 1
             elif decision == "push":
+                if lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE:
+                    logger.info("Skipping Woo push during %s lifecycle for item %s", lifecycle_state, theere_id)
+                    return results
                 if not self._local_rev_matches(int(theere_id), local_snapshot["local_rev"]):
                     return results
                 self._push_snapshot_to_woo(
