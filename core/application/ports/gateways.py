@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Protocol
+
+
+class WooGateway(Protocol):
+    def fetch_order_by_id(self, store: Dict[str, Any], woo_order_id: int) -> Dict[str, Any] | None: ...
+    def fetch_products_page(self, store: Dict[str, Any], page: int, per_page: int) -> List[Dict[str, Any]]: ...
+
+
+class DiscogsGateway(Protocol):
+    def update_listing_quantity(self, store: Dict[str, Any], listing_id: int, quantity: int) -> Dict[str, Any]: ...
+    def update_listing(self, store: Dict[str, Any], listing_id: int, payload: Dict[str, Any]) -> Dict[str, Any]: ...

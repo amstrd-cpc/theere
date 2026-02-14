@@ -33,17 +33,11 @@ worker-logs: ## Tail worker logs
 redis-logs: ## Tail Redis logs
 	$(COMPOSE) logs -f redis
 
-bot-logs: ## Tail bot logs
-	$(COMPOSE) logs -f bot
-
 api-sh: ## Shell into API container
 	$(COMPOSE) exec api bash
 
 worker-sh: ## Shell into worker container
 	$(COMPOSE) exec worker bash
-
-bot-sh: ## Shell into bot container
-	$(COMPOSE) exec bot bash
 
 redis-cli: ## Open redis-cli
 	$(COMPOSE) exec redis redis-cli
@@ -54,10 +48,13 @@ migrate: ## Run database migrations in API container
 health: ## Check API health endpoint
 	curl -fsS http://localhost:$${WEBHOOK_PORT:-8080}/health >/dev/null && echo "OK" || (echo "FAILED"; exit 1)
 
+core-import-check: ## Ensure core doesn't import forbidden infrastructure modules
+	python scripts/check_core_imports.py
+
 help: ## Show this help
 	@printf "\nTargets:\n\n"
 	@grep -E '^[a-zA-Z0-9_.-]+:|^## ' $(MAKEFILE_LIST) | \
 	awk 'BEGIN{FS=":|## "}{if($$0 ~ /:$$/){t=$$1}else if($$0 ~ /^## /){printf "  \033[36m%-18s\033[0m %s\n", t, $$2}}'
 
-.PHONY: up rebuild down down-v restart ps logs api-logs worker-logs redis-logs bot-logs \
-        api-sh worker-sh bot-sh redis-cli migrate health help
+.PHONY: up rebuild down down-v restart ps logs api-logs worker-logs redis-logs \
+        api-sh worker-sh redis-cli migrate health core-import-check help

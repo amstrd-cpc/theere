@@ -9,10 +9,6 @@ services:
     build: .
     command: python run.py api
     environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-      - BOT_PASSWORD=${BOT_PASSWORD}
-      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
-      - ADMIN_IDS=${ADMIN_IDS}
       - RECORDSTORE_DB_FILE=${RECORDSTORE_DB_FILE:-/data/clime_db.db}
       - SALES_DB_PATH=${SALES_DB_PATH:-/data/sales.db}
       - REDIS_URL=redis://redis:6379/0
@@ -30,27 +26,6 @@ services:
     build: .
     command: python run.py worker
     environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-      - BOT_PASSWORD=${BOT_PASSWORD}
-      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
-      - ADMIN_IDS=${ADMIN_IDS}
-      - RECORDSTORE_DB_FILE=${RECORDSTORE_DB_FILE:-/data/clime_db.db}
-      - SALES_DB_PATH=${SALES_DB_PATH:-/data/sales.db}
-      - REDIS_URL=redis://redis:6379/0
-      - DEFAULT_STORE_ID=${DEFAULT_STORE_ID}
-    depends_on:
-      - redis
-    volumes:
-      - recordstore-data:/data
-
-  bot:
-    build: .
-    command: python run.py bot
-    environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-      - BOT_PASSWORD=${BOT_PASSWORD}
-      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
-      - ADMIN_IDS=${ADMIN_IDS}
       - RECORDSTORE_DB_FILE=${RECORDSTORE_DB_FILE:-/data/clime_db.db}
       - SALES_DB_PATH=${SALES_DB_PATH:-/data/sales.db}
       - REDIS_URL=redis://redis:6379/0

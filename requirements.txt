@@ -1,5 +1,4 @@
 # Core Telegram Bot Framework
-python-telegram-bot[job-queue]
 
 # Environment Variables Management
 python-dotenv
