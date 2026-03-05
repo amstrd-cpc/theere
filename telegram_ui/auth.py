@@ -16,11 +16,36 @@ auth_manager = AuthManager(settings.bot_password, settings.session_timeout_hours
 WAITING_FOR_PASSWORD = 0
 
 
+async def reply_via_available_channel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    *,
+    use_edit_for_callback: bool = False,
+    **kwargs,
+):
+    if update.message:
+        return await update.message.reply_text(text, **kwargs)
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        callback_message = update.callback_query.message
+        if callback_message:
+            if use_edit_for_callback:
+                return await callback_message.edit_text(text, **kwargs)
+            return await callback_message.reply_text(text, **kwargs)
+
+    if update.effective_chat:
+        return await context.bot.send_message(chat_id=update.effective_chat.id, text=text, **kwargs)
+
+    return None
+
+
 def require_auth(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user_id = update.effective_user.id
         if not await run_blocking(auth_manager.is_authenticated, user_id):
-            await update.message.reply_text(messages.AUTH_REQUIRED)
+            await reply_via_available_channel(update, context, messages.AUTH_REQUIRED)
             return
         return await func(update, context, *args, **kwargs)
 
@@ -31,7 +56,7 @@ def require_admin(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user_id = update.effective_user.id
         if settings.admin_ids and user_id not in settings.admin_ids:
-            await update.message.reply_text(messages.ADMIN_ONLY)
+            await reply_via_available_channel(update, context, messages.ADMIN_ONLY)
             return
         return await func(update, context, *args, **kwargs)
 
@@ -160,6 +185,11 @@ async def check_auth_middleware(update: Update, context: ContextTypes.DEFAULT_TY
         if command in ["/login", "/start", "/help"]:
             return True
     if not await run_blocking(auth_manager.is_authenticated, user_id):
-        await update.message.reply_text(messages.AUTH_REQUIRED_MARKDOWN, parse_mode="Markdown")
+        await reply_via_available_channel(
+            update,
+            context,
+            messages.AUTH_REQUIRED_MARKDOWN,
+            parse_mode="Markdown",
+        )
         return False
     return True
