@@ -116,13 +116,13 @@ AUTH_REQUIRED = (
 )
 
 AUTH_REQUIRED_MARKDOWN = (
-    "🔒 **Access Denied!**\n\n"
+    "🔒 *Access Denied!*\n\n"
     "You must authenticate first.\n"
     "Use /login to enter the password."
 )
 
 LOGIN_PROMPT = (
-    "🔐 **Authentication Required**\n\n"
+    "🔐 *Authentication Required*\n\n"
     "Please enter the bot password:"
 )
 
@@ -133,7 +133,7 @@ LOGIN_ALREADY = (
 )
 
 LOGIN_SUCCESS = (
-    "✅ **Authentication Successful!**\n\n"
+    "✅ *Authentication Successful!*\n\n"
     "Welcome, {first_name}!\n"
     "Session expires in {hours} hours.\n\n"
     "You can now use all bot commands.\n"
@@ -141,12 +141,12 @@ LOGIN_SUCCESS = (
 )
 
 LOGIN_FAILURE = (
-    "❌ **Incorrect Password!**\n\n"
+    "❌ *Incorrect Password!*\n\n"
     "Access denied. Please try again with /login"
 )
 
 LOGOUT_SUCCESS = (
-    "✅ **Logged Out Successfully**\n\n"
+    "✅ *Logged Out Successfully*\n\n"
     "You have been signed out of the bot.\n"
     "Use /login to authenticate again."
 )
@@ -157,18 +157,18 @@ LOGOUT_ALREADY = (
 )
 
 STATUS_ACTIVE = (
-    "✅ **Authentication Status: ACTIVE**\n\n"
+    "✅ *Authentication Status: ACTIVE*\n\n"
     "Session expires in: {time_left}\n"
     "Use /logout to sign out."
 )
 
 STATUS_INACTIVE = (
-    "❌ **Authentication Status: NOT AUTHENTICATED**\n\n"
+    "❌ *Authentication Status: NOT AUTHENTICATED*\n\n"
     "Use /login to enter the password."
 )
 
 ADMIN_USERS_EMPTY = "No active users."
-ADMIN_USERS_HEADER = "👥 **Active Users:**\n\n"
+ADMIN_USERS_HEADER = "👥 *Active Users:*\n\n"
 ADMIN_AUTH_REQUIRED = "🔒 Authentication required!"
 ADMIN_ONLY = "🚫 Admin access required for this command."
 
