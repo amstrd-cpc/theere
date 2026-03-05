@@ -156,7 +156,7 @@ def create_auth_handlers():
 async def check_auth_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if update.message and update.message.text:
-        command = update.message.text.split()[0].lower()
+        command = update.message.text.split()[0].lower().split("@", 1)[0]
         if command in ["/login", "/start", "/help"]:
             return True
     if not await run_blocking(auth_manager.is_authenticated, user_id):
