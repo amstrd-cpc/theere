@@ -10,11 +10,25 @@ from config.settings import load_settings
 
 logger = logging.getLogger(__name__)
 
+_REDIS_CONNECTION: redis.Redis | None = None
+_QUEUE: Queue | None = None
+
+
+def _get_redis_connection() -> redis.Redis:
+    global _REDIS_CONNECTION
+    if _REDIS_CONNECTION is None:
+        settings = load_settings()
+        _REDIS_CONNECTION = redis.from_url(settings.redis_url)
+    return _REDIS_CONNECTION
+
 
 def get_queue() -> Queue:
-    settings = load_settings()
-    connection = redis.from_url(settings.redis_url)
-    return Queue("webhooks", connection=connection, default_timeout=600)
+    global _QUEUE
+    if _QUEUE is None:
+        _QUEUE = Queue(
+            "webhooks", connection=_get_redis_connection(), default_timeout=600
+        )
+    return _QUEUE
 
 
 def enqueue_job(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:

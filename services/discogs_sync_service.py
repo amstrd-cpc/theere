@@ -368,7 +368,7 @@ def _discogs_orders_processed(order_id: int) -> bool:
 
 
 def _mark_discogs_order_processed(order_id: int) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO discogs_orders (order_id, processed_at) VALUES (?, ?)",
@@ -436,7 +436,7 @@ def bootstrap_collection_import(store_id: int) -> Dict[str, int]:
     store = get_store(store_id)
     if not store:
         return {"imported": 0, "updated": 0}
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     releases = fetch_collection_releases(store)
     release_counts: Dict[int, int] = {}
     for release in releases:

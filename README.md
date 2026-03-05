@@ -27,7 +27,7 @@ Production-ready record store management bot for inventory, sales logging, Disco
 
 2. **Install dependencies**
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements.txt -r requirements-dev.txt
    ```
 
 3. **Create `.env`** (global settings only)
@@ -137,7 +137,22 @@ Order events always apply locally:
 - Webhook endpoint is fast: validate → persist event → enqueue
 - Worker does heavy processing: order fetch, inventory decrement, sales log, Discogs sync
 
+## Development workflow
+1. Install git hooks:
+```bash
+pre-commit install
+```
+2. Run checks locally:
+```bash
+pytest -q
+flake8
+```
+
+## Dependency upgrades
+- Runtime deps are pinned in `requirements.txt`; dev tools are pinned in `requirements-dev.txt`.
+- Upgrade workflow: bump versions intentionally, run `pytest -q` and `flake8`, then commit lock updates together.
+
 ## Tests
 ```bash
-pytest
+pytest -q
 ```

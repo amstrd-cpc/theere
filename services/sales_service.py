@@ -28,7 +28,7 @@ def record_sale(item: Dict[str, Any], price: float, payment_method: str) -> Dict
                 price,
                 item.get("supplier_id"),
                 payment_method,
-                datetime.datetime.utcnow().isoformat(),
+                datetime.datetime.now(datetime.UTC).isoformat(),
             ),
         )
         conn.commit()

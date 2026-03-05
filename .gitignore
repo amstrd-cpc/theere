@@ -1,5 +1,13 @@
-clime_db.db
 .env
-sales_log.db
-venv
+.venv/
+venv/
 __pycache__/
+*.py[cod]
+
+# Runtime databases
+*.db
+/data/*.db
+
+# Generated sales reports
+sales_reports/*.xlsx
+!sales_reports/.gitkeep

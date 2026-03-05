@@ -18,7 +18,7 @@ def run_backup(backup_type: str) -> Optional[str]:
     db_path = Path(settings.db_path)
     if not db_path.is_absolute():
         db_path = Path(os.getcwd()) / db_path
-    timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     base_dir = Path(os.getcwd()) / "backups" / backup_type
     base_dir.mkdir(parents=True, exist_ok=True)
     backup_path = base_dir / f"inventory_{timestamp}.sqlite"
@@ -42,7 +42,7 @@ def run_backup(backup_type: str) -> Optional[str]:
 
 
 def _start_backup_run(backup_type: str) -> int:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         cur = conn.execute(
             "INSERT INTO backup_runs (ts_started, backup_type, status) VALUES (?, ?, ?)",
@@ -53,7 +53,7 @@ def _start_backup_run(backup_type: str) -> int:
 
 
 def _finish_backup_run(run_id: int, *, status: str, path: Optional[str] = None, error: Optional[str] = None) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             """
@@ -67,7 +67,7 @@ def _finish_backup_run(run_id: int, *, status: str, path: Optional[str] = None, 
 
 
 def _apply_retention(backup_type: str) -> None:
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC)
     base_dir = Path(os.getcwd()) / "backups" / backup_type
     if backup_type == "rolling":
         cutoff = now - datetime.timedelta(hours=24)

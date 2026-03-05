@@ -96,7 +96,7 @@ def mark_import_conflict(*, store_id: int, woo_product_id: int, reason: str) -> 
             ON CONFLICT(store_id, woo_product_id)
             DO UPDATE SET status='open', reason=excluded.reason, updated_at=excluded.updated_at
             """,
-            (store_id, woo_product_id, reason, datetime.datetime.utcnow().isoformat(), datetime.datetime.utcnow().isoformat()),
+            (store_id, woo_product_id, reason, datetime.datetime.now(datetime.UTC).isoformat(), datetime.datetime.now(datetime.UTC).isoformat()),
         )
         conn.commit()
 
@@ -123,15 +123,15 @@ def queue_manual_mapping(*, store_id: int, woo_product: Dict[str, Any], reason: 
                 woo_product.get("name") or "Unknown",
                 reason,
                 json.dumps(woo_product, sort_keys=True),
-                datetime.datetime.utcnow().isoformat(),
-                datetime.datetime.utcnow().isoformat(),
+                datetime.datetime.now(datetime.UTC).isoformat(),
+                datetime.datetime.now(datetime.UTC).isoformat(),
             ),
         )
         conn.commit()
 
 
 def resolve_import_decision(*, store_id: int, woo_product_id: int) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             "UPDATE product_mapping_queue SET status = 'resolved', updated_at = ? WHERE store_id = ? AND woo_product_id = ?",
@@ -154,7 +154,7 @@ def upsert_product_map(
     discogs_listing_id: Optional[int] = None,
     discogs_release_id: Optional[int] = None,
 ) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             """
@@ -250,7 +250,7 @@ def list_product_mappings(store_id: int) -> list[Dict[str, Any]]:
 
 
 def clear_discogs_listing(store_id: int, internal_product_id: int) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             """
@@ -266,7 +266,7 @@ def clear_discogs_listing(store_id: int, internal_product_id: int) -> None:
 def update_product_map_fields(store_id: int, internal_product_id: int, fields: Dict[str, Any]) -> None:
     if not fields:
         return
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     fields = dict(fields)
     fields.setdefault("updated_at", now)
     keys = sorted(fields.keys())

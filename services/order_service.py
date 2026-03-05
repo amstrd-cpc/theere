@@ -14,7 +14,7 @@ def _hash_payload(payload: Dict[str, Any]) -> str:
 
 
 def upsert_order_snapshot(store_id: int, order: Dict[str, Any]) -> int:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     woo_order_id = int(order.get("id"))
     status = (order.get("status") or "").lower()
     billing = order.get("billing") or {}
@@ -95,7 +95,7 @@ def upsert_order_snapshot(store_id: int, order: Dict[str, Any]) -> int:
 
 
 def mark_inventory_applied(order_id: int) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             "UPDATE orders SET inventory_applied_at = ? WHERE id = ?",

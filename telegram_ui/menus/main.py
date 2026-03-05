@@ -4,7 +4,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.ui_session_service import create_callback_session, inject_session
 from telegram_ui.menus.admin import MENU as ADMIN_MENU
-from telegram_ui.menus.common import MenuDefinition, MenuButton, back_button, home_button, menu_button
+from telegram_ui.menus.common import (
+    MenuDefinition,
+    MenuButton,
+    back_button,
+    home_button,
+    menu_button,
+)
 from telegram_ui.menus.discogs import MENU as DISCOGS_MENU
 from telegram_ui.menus.inventory import MENU as INVENTORY_MENU
 from telegram_ui.menus.misc import MENU as MISC_MENU
@@ -104,7 +110,9 @@ def build_command_button_map() -> dict[str, tuple[str, ...]]:
         for button in menu.buttons:
             if not button.command:
                 continue
-            mapping.setdefault(button.command, []).append(f"{menu.menu_id}:{button.label}")
+            mapping.setdefault(button.command, []).append(
+                f"{menu.menu_id}:{button.label}"
+            )
 
     return {command: tuple(button_refs) for command, button_refs in mapping.items()}
 
@@ -137,15 +145,28 @@ def _build_breadcrumb(menu_id: str) -> str:
     return " › ".join(reversed(trail))
 
 
-def build_inline_menu(menu_id: str, *, user_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
+def build_inline_menu(
+    menu_id: str, *, user_id: int | None = None
+) -> tuple[str, InlineKeyboardMarkup]:
     definition = MENUS[menu_id]
     session_token = None
     if user_id is not None:
-        session = create_callback_session(user_id=user_id, expected_node=f"nav:{menu_id}", expected_state="menu")
+        session = create_callback_session(
+            user_id=user_id, expected_node=f"nav:{menu_id}", expected_state="menu"
+        )
         session_token = str(session["session_token"])
 
     rows = [
-        [InlineKeyboardButton(text=button.label, callback_data=inject_session(button.callback_data, session_token) if session_token else button.callback_data)]
+        [
+            InlineKeyboardButton(
+                text=button.label,
+                callback_data=(
+                    inject_session(button.callback_data, session_token)
+                    if session_token
+                    else button.callback_data
+                ),
+            )
+        ]
         for button in definition.buttons
     ]
 
@@ -154,7 +175,12 @@ def build_inline_menu(menu_id: str, *, user_id: int | None = None) -> tuple[str,
             back_button(menu_id, session_token=session_token),
             home_button(session_token=session_token),
         )
-        rows.append([InlineKeyboardButton(text=btn.label, callback_data=btn.callback_data) for btn in nav_buttons])
+        rows.append(
+            [
+                InlineKeyboardButton(text=btn.label, callback_data=btn.callback_data)
+                for btn in nav_buttons
+            ]
+        )
 
-    text = f"📍 { _build_breadcrumb(menu_id) }\nChoose an action:"
+    text = f"📍 {_build_breadcrumb(menu_id)}\nChoose an action:"
     return text, InlineKeyboardMarkup(rows)

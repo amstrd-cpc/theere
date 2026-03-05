@@ -148,7 +148,7 @@ def _inventory_from_woo(product: Dict[str, Any]) -> Dict[str, Any]:
         cover_url = images[0].get("src") or None
 
     description = _clean_text(product.get("description"))
-    created_at = product.get("date_created_gmt") or product.get("date_created") or datetime.datetime.utcnow().isoformat()
+    created_at = product.get("date_created_gmt") or product.get("date_created") or datetime.datetime.now(datetime.UTC).isoformat()
 
     return {
         "artist_album": product.get("name") or "Unknown",

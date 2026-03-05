@@ -37,7 +37,7 @@ def create_webhook_event(
 
 
 def mark_webhook_processed(event_id: int) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             "UPDATE webhook_events SET processed_at = ?, status = ? WHERE id = ?",
@@ -47,7 +47,7 @@ def mark_webhook_processed(event_id: int) -> None:
 
 
 def mark_webhook_failed(event_id: int, error_message: str) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             "UPDATE webhook_events SET processed_at = ?, status = ?, error_message = ? WHERE id = ?",

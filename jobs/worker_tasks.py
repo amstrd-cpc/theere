@@ -139,7 +139,7 @@ def apply_inventory_decrement_for_order(
             {
                 "quantity": new_qty,
                 "woo_synced": 1,
-                "woo_last_synced_at": datetime.datetime.utcnow().isoformat(),
+                "woo_last_synced_at": datetime.datetime.now(datetime.UTC).isoformat(),
             },
             sync_channels=False,
             source="order_decrement",

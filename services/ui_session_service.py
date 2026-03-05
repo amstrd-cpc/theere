@@ -10,7 +10,9 @@ from db.connection import get_inventory_db
 logger = logging.getLogger(__name__)
 
 DEFAULT_TTL = timedelta(minutes=20)
-_TOKEN_RE = re.compile(r"^(?P<sid>[a-f0-9]{8})\.(?P<iat>[0-9a-z]+)\.(?P<exp>[0-9a-z]+)\.(?P<node>[a-z0-9_\-]{1,12})$")
+_TOKEN_RE = re.compile(
+    r"^(?P<sid>[a-f0-9]{8})\.(?P<iat>[0-9a-z]+)\.(?P<exp>[0-9a-z]+)\.(?P<node>[a-z0-9_\-]{1,12})$"
+)
 
 
 def _to_base36(value: int) -> str:
@@ -148,6 +150,8 @@ def validate_callback_session(
         return False, "state_mismatch"
 
     expires_at = datetime.fromisoformat(row["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
         return False, "session_expired"
 
