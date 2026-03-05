@@ -16,7 +16,9 @@ _ALLOWED_ACTIONS_BY_STEP = {
 }
 
 
-def create_add_session(*, ttl: timedelta = ADD_SESSION_TTL, now: datetime | None = None) -> dict[str, str]:
+def create_add_session(
+    *, ttl: timedelta = ADD_SESSION_TTL, now: datetime | None = None
+) -> dict[str, str]:
     started_at_dt = now or datetime.now(timezone.utc)
     expires_at_dt = started_at_dt + ttl
     return {
@@ -34,7 +36,11 @@ def validate_add_callback(
     callback_action: str | None,
     now: datetime | None = None,
 ) -> tuple[bool, str]:
-    if not session or not callback_session_id or callback_session_id != session.get("session_id"):
+    if (
+        not session
+        or not callback_session_id
+        or callback_session_id != session.get("session_id")
+    ):
         return False, "missing_or_mismatched_session_id"
 
     expires_at_raw = session.get("expires_at")
@@ -42,6 +48,8 @@ def validate_add_callback(
         return False, "expired_ttl"
     try:
         expires_at = datetime.fromisoformat(expires_at_raw)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
     except ValueError:
         return False, "expired_ttl"
     now_dt = now or datetime.now(timezone.utc)

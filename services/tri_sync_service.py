@@ -6,9 +6,16 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 
 from db.connection import get_inventory_db
-from services.discogs_service import fetch_listing, update_listing, update_listing_quantity
+from services.discogs_service import (
+    fetch_listing,
+    update_listing,
+    update_listing_quantity,
+)
 from services.inventory_service import get_inventory_by_id, update_inventory_fields
-from services.product_map_service import list_product_mappings, update_product_map_fields
+from services.product_map_service import (
+    list_product_mappings,
+    update_product_map_fields,
+)
 from services.store_service import (
     SYNC_LIFECYCLE_STEADY_STATE,
     get_store,
@@ -22,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _start_tri_sync_run(store_id: int, run_type: str) -> int:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         cur = conn.execute(
             """
@@ -45,7 +52,7 @@ def _finish_tri_sync_run(
     errors_count: int = 0,
     last_error: Optional[str] = None,
 ) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             """
@@ -83,12 +90,15 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime.datetime]:
         return None
     try:
         cleaned = value.replace("Z", "+00:00")
-        return datetime.datetime.fromisoformat(cleaned)
+        parsed = datetime.datetime.fromisoformat(cleaned)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.UTC)
     except ValueError:
         return None
 
 
-def _discogs_snapshot(listing: Dict[str, Any]) -> Tuple[int, float, Optional[datetime.datetime]]:
+def _discogs_snapshot(
+    listing: Dict[str, Any],
+) -> Tuple[int, float, Optional[datetime.datetime]]:
     quantity = int(listing.get("quantity") or 0)
     try:
         price = float(listing.get("price") or 0)
@@ -98,13 +108,17 @@ def _discogs_snapshot(listing: Dict[str, Any]) -> Tuple[int, float, Optional[dat
     return quantity, price, timestamp
 
 
-def _woo_snapshot(product: Dict[str, Any]) -> Tuple[int, float, Optional[datetime.datetime]]:
+def _woo_snapshot(
+    product: Dict[str, Any],
+) -> Tuple[int, float, Optional[datetime.datetime]]:
     quantity = int(product.get("stock_quantity") or 0)
     try:
         price = float(product.get("regular_price") or product.get("price") or 0)
     except (TypeError, ValueError):
         price = 0.0
-    timestamp = _parse_timestamp(product.get("date_modified_gmt") or product.get("date_modified"))
+    timestamp = _parse_timestamp(
+        product.get("date_modified_gmt") or product.get("date_modified")
+    )
     return quantity, price, timestamp
 
 
@@ -124,12 +138,16 @@ def _discogs_allowed_updates(
     updates: Dict[str, Any] = {}
     if "quantity" in incoming_fields and "quantity" not in NEVER_ACCEPT_FIELDS:
         updates["quantity"] = quantity
-    if ("listing_price" in incoming_fields or "price" in incoming_fields) and "price" not in NEVER_ACCEPT_FIELDS:
+    if (
+        "listing_price" in incoming_fields or "price" in incoming_fields
+    ) and "price" not in NEVER_ACCEPT_FIELDS:
         updates["price_gel"] = price
     return updates
 
 
-def _woo_allowed_updates(incoming_fields: set[str], *, quantity: int, price: float) -> Dict[str, Any]:
+def _woo_allowed_updates(
+    incoming_fields: set[str], *, quantity: int, price: float
+) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
     if "quantity" in incoming_fields and "quantity" not in NEVER_ACCEPT_FIELDS:
         updates["quantity"] = quantity
@@ -177,7 +195,11 @@ def _should_push_local(
         return False
     if local_changed:
         return True
-    if not remote_changed and local_hash == last_sync_hash and last_sync_direction.startswith("from_"):
+    if (
+        not remote_changed
+        and local_hash == last_sync_hash
+        and last_sync_direction.startswith("from_")
+    ):
         return True
     return False
 
@@ -189,9 +211,13 @@ def poll_discogs_listings(store_id: int) -> None:
     settings = get_store_settings(store_id)
     sync_price = bool(settings.get("discogs_price_sync"))
     lifecycle_state = get_sync_lifecycle_state(settings)
-    allow_remote_overwrite = lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE or bool(settings.get("discogs_allow_incoming"))
+    allow_remote_overwrite = lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE or bool(
+        settings.get("discogs_allow_incoming")
+    )
     allow_incoming = allow_remote_overwrite
-    incoming_fields = normalize_incoming_fields(settings.get("discogs_incoming_fields") or [])
+    incoming_fields = normalize_incoming_fields(
+        settings.get("discogs_incoming_fields") or []
+    )
     if lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE:
         incoming_fields = incoming_fields or {"quantity", "listing_price", "price"}
     run_id = _start_tri_sync_run(store_id, "discogs")
@@ -258,13 +284,18 @@ def poll_discogs_listings(store_id: int) -> None:
             ):
                 if not allow_incoming:
                     drifted_count += 1
-                    logger.info("Discogs incoming drifted (incoming disabled) for %s", internal_id)
+                    logger.info(
+                        "Discogs incoming drifted (incoming disabled) for %s",
+                        internal_id,
+                    )
                 else:
                     updates = _discogs_allowed_updates(
                         incoming_fields, quantity=remote_qty, price=remote_price
                     )
                     if updates:
-                        update_inventory_fields(int(internal_id), updates, sync_channels=False)
+                        update_inventory_fields(
+                            int(internal_id), updates, sync_channels=False
+                        )
                         applied_count += 1
                         update_product_map_fields(
                             store_id,
@@ -272,30 +303,40 @@ def poll_discogs_listings(store_id: int) -> None:
                             {
                                 "last_sync_direction": "from_discogs",
                                 "last_sync_hash": remote_hash,
-                                "last_sync_at": datetime.datetime.utcnow().isoformat(),
+                                "last_sync_at": datetime.datetime.now(
+                                    datetime.UTC
+                                ).isoformat(),
                             },
                         )
                         local_qty, local_price = remote_qty, remote_price
                         local_hash = remote_hash
                     else:
                         drifted_count += 1
-            elif _should_push_local(
-                remote_hash=remote_hash,
-                local_hash=local_hash,
-                remote_changed=remote_changed,
-                local_changed=local_changed,
-                last_sync_direction=last_sync_direction,
-                last_sync_hash=last_sync_hash,
-            ) or hard_conflict:
+            elif (
+                _should_push_local(
+                    remote_hash=remote_hash,
+                    local_hash=local_hash,
+                    remote_changed=remote_changed,
+                    local_changed=local_changed,
+                    last_sync_direction=last_sync_direction,
+                    last_sync_hash=last_sync_hash,
+                )
+                or hard_conflict
+            ):
                 if not allow_remote_overwrite:
                     drifted_count += 1
-                    logger.info("Discogs remote overwrite blocked by steady-state incoming policy for %s", internal_id)
+                    logger.info(
+                        "Discogs remote overwrite blocked by steady-state incoming policy for %s",
+                        internal_id,
+                    )
                     continue
                 push_success = False
                 try:
                     update_listing_quantity(store, int(listing_id), local_qty)
                     if sync_price:
-                        update_listing(store, int(listing_id), {"price": f"{local_price:.2f}"})
+                        update_listing(
+                            store, int(listing_id), {"price": f"{local_price:.2f}"}
+                        )
                     push_success = True
                 except Exception:
                     logger.exception("Failed updating Discogs listing %s", listing_id)
@@ -307,7 +348,9 @@ def poll_discogs_listings(store_id: int) -> None:
                         {
                             "last_sync_direction": "to_discogs",
                             "last_sync_hash": local_hash,
-                            "last_sync_at": datetime.datetime.utcnow().isoformat(),
+                            "last_sync_at": datetime.datetime.now(
+                                datetime.UTC
+                            ).isoformat(),
                         },
                     )
 
@@ -317,7 +360,9 @@ def poll_discogs_listings(store_id: int) -> None:
                 {
                     "discogs_last_seen_quantity": remote_qty,
                     "discogs_last_seen_price": remote_price,
-                    "discogs_last_seen_at": datetime.datetime.utcnow().isoformat(),
+                    "discogs_last_seen_at": datetime.datetime.now(
+                        datetime.UTC
+                    ).isoformat(),
                     "discogs_last_seen_hash": remote_hash,
                 },
             )
@@ -350,9 +395,13 @@ def poll_woo_products(store_id: int) -> None:
         return
     settings = get_store_settings(store_id)
     lifecycle_state = get_sync_lifecycle_state(settings)
-    allow_remote_overwrite = lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE or bool(settings.get("woo_allow_incoming"))
+    allow_remote_overwrite = lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE or bool(
+        settings.get("woo_allow_incoming")
+    )
     allow_incoming = allow_remote_overwrite
-    incoming_fields = normalize_incoming_fields(settings.get("woo_incoming_fields") or [])
+    incoming_fields = normalize_incoming_fields(
+        settings.get("woo_incoming_fields") or []
+    )
     if lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE:
         incoming_fields = incoming_fields or {"quantity", "price"}
     run_id = _start_tri_sync_run(store_id, "woo")
@@ -419,11 +468,17 @@ def poll_woo_products(store_id: int) -> None:
             ):
                 if not allow_incoming:
                     drifted_count += 1
-                    logger.info("Woo incoming drifted (incoming disabled) for %s", internal_id)
+                    logger.info(
+                        "Woo incoming drifted (incoming disabled) for %s", internal_id
+                    )
                 else:
-                    updates = _woo_allowed_updates(incoming_fields, quantity=remote_qty, price=remote_price)
+                    updates = _woo_allowed_updates(
+                        incoming_fields, quantity=remote_qty, price=remote_price
+                    )
                     if updates:
-                        update_inventory_fields(int(internal_id), updates, sync_channels=False)
+                        update_inventory_fields(
+                            int(internal_id), updates, sync_channels=False
+                        )
                         applied_count += 1
                         update_product_map_fields(
                             store_id,
@@ -431,29 +486,41 @@ def poll_woo_products(store_id: int) -> None:
                             {
                                 "last_sync_direction": "from_woo",
                                 "last_sync_hash": remote_hash,
-                                "last_sync_at": datetime.datetime.utcnow().isoformat(),
+                                "last_sync_at": datetime.datetime.now(
+                                    datetime.UTC
+                                ).isoformat(),
                             },
                         )
                         local_qty, local_price = remote_qty, remote_price
                         local_hash = remote_hash
                     else:
                         drifted_count += 1
-            elif _should_push_local(
-                remote_hash=remote_hash,
-                local_hash=local_hash,
-                remote_changed=remote_changed,
-                local_changed=local_changed,
-                last_sync_direction=last_sync_direction,
-                last_sync_hash=last_sync_hash,
-            ) or hard_conflict:
+            elif (
+                _should_push_local(
+                    remote_hash=remote_hash,
+                    local_hash=local_hash,
+                    remote_changed=remote_changed,
+                    local_changed=local_changed,
+                    last_sync_direction=last_sync_direction,
+                    last_sync_hash=last_sync_hash,
+                )
+                or hard_conflict
+            ):
                 if not allow_remote_overwrite:
                     drifted_count += 1
-                    logger.info("Woo remote overwrite blocked by steady-state incoming policy for %s", internal_id)
+                    logger.info(
+                        "Woo remote overwrite blocked by steady-state incoming policy for %s",
+                        internal_id,
+                    )
                     continue
                 push_success = False
                 try:
                     update_stock(int(product_id), local_qty, store=store)
-                    update_product_by_id(int(product_id), {"regular_price": f"{local_price:.2f}"}, store=store)
+                    update_product_by_id(
+                        int(product_id),
+                        {"regular_price": f"{local_price:.2f}"},
+                        store=store,
+                    )
                     push_success = True
                 except Exception:
                     logger.exception("Failed updating Woo product %s", product_id)
@@ -465,7 +532,9 @@ def poll_woo_products(store_id: int) -> None:
                         {
                             "last_sync_direction": "to_woo",
                             "last_sync_hash": local_hash,
-                            "last_sync_at": datetime.datetime.utcnow().isoformat(),
+                            "last_sync_at": datetime.datetime.now(
+                                datetime.UTC
+                            ).isoformat(),
                         },
                     )
 
@@ -475,7 +544,7 @@ def poll_woo_products(store_id: int) -> None:
                 {
                     "woo_last_seen_quantity": remote_qty,
                     "woo_last_seen_price": remote_price,
-                    "woo_last_seen_at": datetime.datetime.utcnow().isoformat(),
+                    "woo_last_seen_at": datetime.datetime.now(datetime.UTC).isoformat(),
                     "woo_last_seen_hash": remote_hash,
                 },
             )

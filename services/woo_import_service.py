@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from db.connection import get_inventory_db
-from services.inventory_service import get_inventory_by_id, get_or_create_supplier, update_inventory_fields
+from services.inventory_service import (
+    get_inventory_by_id,
+    get_or_create_supplier,
+    update_inventory_fields,
+)
 from services.notification_service import notify_admin
 from services.product_map_service import (
     ImportDecision,
@@ -109,7 +113,7 @@ def _inventory_from_woo(product: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _append_summary_event(store_id: int, summary: ImportSummary) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     payload = json.dumps(summary.as_dict(), sort_keys=True)
     with get_inventory_db() as conn:
         conn.execute(
@@ -141,7 +145,9 @@ def _append_summary_event(store_id: int, summary: ImportSummary) -> None:
         conn.commit()
 
 
-def _process_product(*, store_id: int, product: Dict[str, Any], summary: ImportSummary) -> None:
+def _process_product(
+    *, store_id: int, product: Dict[str, Any], summary: ImportSummary
+) -> None:
     woo_id = product.get("id")
     if not woo_id:
         summary.skipped += 1
@@ -152,13 +158,21 @@ def _process_product(*, store_id: int, product: Dict[str, Any], summary: ImportS
 
     if decision.status == "conflict":
         summary.conflicts += 1
-        mark_import_conflict(store_id=store_id, woo_product_id=int(woo_id), reason=decision.reason or "conflict")
+        mark_import_conflict(
+            store_id=store_id,
+            woo_product_id=int(woo_id),
+            reason=decision.reason or "conflict",
+        )
         summary.details.append(f"conflict woo_id={woo_id} reason={decision.reason}")
         return
 
     if decision.status == "manual":
         summary.manual_needed += 1
-        queue_manual_mapping(store_id=store_id, woo_product=product, reason=decision.reason or "manual_needed")
+        queue_manual_mapping(
+            store_id=store_id,
+            woo_product=product,
+            reason=decision.reason or "manual_needed",
+        )
         summary.details.append(f"manual woo_id={woo_id} reason={decision.reason}")
         return
 
@@ -174,15 +188,32 @@ def _process_product(*, store_id: int, product: Dict[str, Any], summary: ImportS
 
     payload = _inventory_from_woo(product)
     updates: Dict[str, Any] = {}
-    for field in ("artist_album", "label", "format", "condition", "price_gel", "quantity", "year", "description", "cover_url", "supplier_id"):
-        new_value = payload.get(field)
+    for field_name in (
+        "artist_album",
+        "label",
+        "format",
+        "condition",
+        "price_gel",
+        "quantity",
+        "year",
+        "description",
+        "cover_url",
+        "supplier_id",
+    ):
+        new_value = payload.get(field_name)
         if new_value is None:
             continue
-        if existing.get(field) != new_value:
-            updates[field] = new_value
+        if existing.get(field_name) != new_value:
+            updates[field_name] = new_value
 
     if updates:
-        update_inventory_fields(internal_id, updates, sync_channels=False, source="manual_woo", store_id=store_id)
+        update_inventory_fields(
+            internal_id,
+            updates,
+            sync_channels=False,
+            source="manual_woo",
+            store_id=store_id,
+        )
         summary.updated += 1
     else:
         summary.skipped += 1
@@ -196,7 +227,9 @@ def _process_product(*, store_id: int, product: Dict[str, Any], summary: ImportS
     resolve_import_decision(store_id=store_id, woo_product_id=int(woo_id))
 
 
-def import_woo_products(*, store_id: int | None = None, per_page: int = 100, notify: bool = False) -> Dict[str, int]:
+def import_woo_products(
+    *, store_id: int | None = None, per_page: int = 100, notify: bool = False
+) -> Dict[str, int]:
     if not is_configured(store_id):
         raise WooNotConfigured("WooCommerce not configured")
 
@@ -207,11 +240,15 @@ def import_woo_products(*, store_id: int | None = None, per_page: int = 100, not
     summary = ImportSummary()
     page = 1
     while True:
-        products = fetch_products_page(page=page, per_page=per_page, store=store, store_id=int(store["id"]))
+        products = fetch_products_page(
+            page=page, per_page=per_page, store=store, store_id=int(store["id"])
+        )
         if not products:
             break
         for product in products:
-            _process_product(store_id=int(store["id"]), product=product, summary=summary)
+            _process_product(
+                store_id=int(store["id"]), product=product, summary=summary
+            )
         if len(products) < per_page:
             break
         page += 1

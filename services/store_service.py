@@ -116,7 +116,7 @@ def create_store(
     discogs_username: Optional[str] = None,
     discogs_user_id: Optional[int] = None,
 ) -> int:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     payload_settings = DEFAULT_SETTINGS.copy()
     if settings:
         payload_settings.update(settings)
@@ -160,7 +160,7 @@ def create_store(
 
 
 def update_store_webhook_ids(store_id: int, webhook_ids: Dict[str, Any]) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     webhook_json = json.dumps(webhook_ids)
     with get_inventory_db() as conn:
         conn.execute(
@@ -189,7 +189,7 @@ def update_store_credentials(
         updates["woo_consumer_secret"] = consumer_secret
     if not updates:
         return
-    updates["updated_at"] = datetime.datetime.utcnow().isoformat()
+    updates["updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
     columns = ", ".join(f"{key} = ?" for key in updates.keys())
     values = list(updates.values())
     values.append(store_id)
@@ -199,7 +199,7 @@ def update_store_credentials(
 
 
 def update_store_settings(store_id: int, settings: Dict[str, Any]) -> Dict[str, Any]:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         cur = conn.execute("SELECT settings_json FROM stores WHERE id = ?", (store_id,))
         row = cur.fetchone()
@@ -215,7 +215,7 @@ def update_store_settings(store_id: int, settings: Dict[str, Any]) -> Dict[str, 
 
 
 def transition_bootstrap_to_running(store_id: int) -> tuple[bool, str]:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         cur = conn.execute("SELECT settings_json FROM stores WHERE id = ?", (store_id,))
         row = cur.fetchone()
@@ -264,7 +264,7 @@ def get_store_settings(store_id: int) -> Dict[str, Any]:
 
 
 def set_store_enabled(store_id: int, enabled: bool) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             "UPDATE stores SET is_enabled = ?, updated_at = ? WHERE id = ?",
@@ -280,7 +280,7 @@ def update_store_discogs(
     discogs_username: Optional[str],
     discogs_user_id: Optional[int],
 ) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             """
@@ -294,7 +294,7 @@ def update_store_discogs(
 
 
 def update_discogs_sync_time(store_id: int) -> None:
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             "UPDATE stores SET discogs_last_sync_at = ?, updated_at = ? WHERE id = ?",

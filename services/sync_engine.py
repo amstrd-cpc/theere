@@ -48,7 +48,9 @@ class SyncEngine:
         self.lock_ttl_seconds = lock_ttl_seconds
         self.lock_owner = str(uuid.uuid4())
 
-    def run_periodic_sync(self, store_id: int, *, run_type: str = "periodic") -> Optional[int]:
+    def run_periodic_sync(
+        self, store_id: int, *, run_type: str = "periodic"
+    ) -> Optional[int]:
         store = get_store(store_id)
         if not store or not is_configured(store_id):
             return None
@@ -68,7 +70,9 @@ class SyncEngine:
     def run_manual_sync(self, store_id: int) -> Optional[int]:
         return self.run_periodic_sync(store_id, run_type="manual")
 
-    def run_instant_sync_for_item(self, store_id: int, internal_product_id: int) -> Optional[int]:
+    def run_instant_sync_for_item(
+        self, store_id: int, internal_product_id: int
+    ) -> Optional[int]:
         store = get_store(store_id)
         if not store or not is_configured(store_id):
             return None
@@ -77,10 +81,16 @@ class SyncEngine:
             return None
         run_id = self._start_sync_run(store_id, run_type="instant")
         try:
-            result = self._push_item_to_woo(store_id, internal_product_id, sync_run_id=run_id)
+            result = self._push_item_to_woo(
+                store_id, internal_product_id, sync_run_id=run_id
+            )
             self._finish_sync_run(run_id, **result)
         except Exception as exc:
-            logger.exception("Instant sync failed for store %s item %s", store_id, internal_product_id)
+            logger.exception(
+                "Instant sync failed for store %s item %s",
+                store_id,
+                internal_product_id,
+            )
             self._finish_sync_run(run_id, errors_count=1, last_error=str(exc))
         return run_id
 
@@ -91,7 +101,9 @@ class SyncEngine:
         settings = get_store_settings(store_id)
         trigger_status = (settings.get("auto_decrement_status") or "processing").lower()
         try:
-            orders = fetch_orders(params={"status": trigger_status, "per_page": 50}, store=store)
+            orders = fetch_orders(
+                params={"status": trigger_status, "per_page": 50}, store=store
+            )
         except Exception:
             logger.exception("Failed fetching Woo orders for store %s", store_id)
             return 0
@@ -117,13 +129,20 @@ class SyncEngine:
         settings = get_store_settings(store_id)
         strategy = (settings.get("woo_sync_strategy") or "lww").lower()
         lifecycle_state = get_sync_lifecycle_state(settings)
-        incoming_fields = normalize_incoming_fields(settings.get("woo_incoming_fields") or [])
+        incoming_fields = normalize_incoming_fields(
+            settings.get("woo_incoming_fields") or []
+        )
         if lifecycle_state == SYNC_LIFECYCLE_STEADY_STATE:
             allow_incoming = bool(settings.get("woo_allow_incoming"))
             effective_incoming_fields = incoming_fields
         else:
             allow_incoming = True
-            effective_incoming_fields = incoming_fields or {"quantity", "price", "description", "images"}
+            effective_incoming_fields = incoming_fields or {
+                "quantity",
+                "price",
+                "description",
+                "images",
+            }
 
         results = self._empty_results()
         page = 1
@@ -181,15 +200,22 @@ class SyncEngine:
         if theere_id:
             mapping = find_mapping_by_internal_id(store_id, int(theere_id))
             if not mapping or mapping.get("woo_product_id") != int(woo_id):
-                upsert_product_map(store_id=store_id, internal_product_id=int(theere_id), woo_product_id=int(woo_id), sku=sku or None)
+                upsert_product_map(
+                    store_id=store_id,
+                    internal_product_id=int(theere_id),
+                    woo_product_id=int(woo_id),
+                    sku=sku or None,
+                )
                 results["mapping_fixed_count"] += 1
             update_product_map_fields(
                 store_id,
                 int(theere_id),
                 {
                     "woo_last_seen_quantity": int(product.get("stock_quantity") or 0),
-                    "woo_last_seen_price": float(product.get("regular_price") or product.get("price") or 0),
-                    "woo_last_seen_at": datetime.datetime.utcnow().isoformat(),
+                    "woo_last_seen_price": float(
+                        product.get("regular_price") or product.get("price") or 0
+                    ),
+                    "woo_last_seen_at": datetime.datetime.now(datetime.UTC).isoformat(),
                     "woo_last_seen_modified_at": self._format_woo_modified(product),
                 },
             )
@@ -209,19 +235,29 @@ class SyncEngine:
                 return results
             local_snapshot = self._local_snapshot(item)
             woo_snapshot = self._woo_snapshot(product)
-            decision = self._decide_sync(local_snapshot, woo_snapshot, strategy=strategy)
+            decision = self._decide_sync(
+                local_snapshot, woo_snapshot, strategy=strategy
+            )
             if decision == "pull":
                 results["incoming_count"] += 1
                 if not allow_incoming:
                     results["drifted_count"] += 1
-                    logger.info("Woo incoming change drifted (incoming disabled) for item %s", theere_id)
+                    logger.info(
+                        "Woo incoming change drifted (incoming disabled) for item %s",
+                        theere_id,
+                    )
                     return results
-                if not self._local_rev_matches(int(theere_id), local_snapshot["local_rev"]):
+                if not self._local_rev_matches(
+                    int(theere_id), local_snapshot["local_rev"]
+                ):
                     return results
                 updates = self._filter_incoming_updates(woo_snapshot, incoming_fields)
                 if not updates:
                     results["drifted_count"] += 1
-                    logger.info("Woo incoming change ignored (no allowed fields) for item %s", theere_id)
+                    logger.info(
+                        "Woo incoming change ignored (no allowed fields) for item %s",
+                        theere_id,
+                    )
                     return results
                 update_inventory_fields(
                     int(theere_id),
@@ -235,9 +271,15 @@ class SyncEngine:
                 results["pulled_count"] += 1
             elif decision == "push":
                 if lifecycle_state != SYNC_LIFECYCLE_STEADY_STATE:
-                    logger.info("Skipping Woo push during %s lifecycle for item %s", lifecycle_state, theere_id)
+                    logger.info(
+                        "Skipping Woo push during %s lifecycle for item %s",
+                        lifecycle_state,
+                        theere_id,
+                    )
                     return results
-                if not self._local_rev_matches(int(theere_id), local_snapshot["local_rev"]):
+                if not self._local_rev_matches(
+                    int(theere_id), local_snapshot["local_rev"]
+                ):
                     return results
                 self._push_snapshot_to_woo(
                     store_id,
@@ -248,7 +290,9 @@ class SyncEngine:
                 results["pushed_count"] += 1
         return results
 
-    def _push_item_to_woo(self, store_id: int, internal_product_id: int, *, sync_run_id: Optional[int]) -> Dict[str, int]:
+    def _push_item_to_woo(
+        self, store_id: int, internal_product_id: int, *, sync_run_id: Optional[int]
+    ) -> Dict[str, int]:
         results = self._empty_results()
         item = get_inventory_by_id(internal_product_id)
         if not item:
@@ -273,7 +317,10 @@ class SyncEngine:
                     sync_hash = compute_sync_hash(payload_from_inventory(item))
                     update_inventory_sync(internal_product_id, woo_id, sync_hash)
                 except Exception:
-                    logger.exception("Failed updating inventory sync metadata for %s", internal_product_id)
+                    logger.exception(
+                        "Failed updating inventory sync metadata for %s",
+                        internal_product_id,
+                    )
                 update_product_map_fields(
                     store_id,
                     internal_product_id,
@@ -282,7 +329,9 @@ class SyncEngine:
             else:
                 woo_id = int(mapping["woo_product_id"])
             local_snapshot = self._local_snapshot(item)
-            self._push_snapshot_to_woo(store_id, woo_id, local_snapshot, sync_run_id=sync_run_id)
+            self._push_snapshot_to_woo(
+                store_id, woo_id, local_snapshot, sync_run_id=sync_run_id
+            )
             results["pushed_count"] += 1
         return results
 
@@ -298,7 +347,9 @@ class SyncEngine:
             "stock_quantity": local_snapshot["quantity"],
             "manage_stock": True,
             "regular_price": f"{local_snapshot['price_gel']:.2f}",
-            "meta_data": [{"key": "theere_id", "value": str(local_snapshot["theere_id"])}],
+            "meta_data": [
+                {"key": "theere_id", "value": str(local_snapshot["theere_id"])}
+            ],
         }
         response = update_product_by_id(woo_id, payload, store_id=store_id)
         update_product_map_fields(
@@ -329,8 +380,10 @@ class SyncEngine:
             note=f"Pushed price to Woo product {woo_id}",
         )
 
-    def _create_local_from_woo(self, store_id: int, product: Dict[str, Any]) -> Dict[str, Any]:
-        now = datetime.datetime.utcnow().isoformat()
+    def _create_local_from_woo(
+        self, store_id: int, product: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        now = datetime.datetime.now(datetime.UTC).isoformat()
         qty = int(product.get("stock_quantity") or 0)
         try:
             price = float(product.get("regular_price") or product.get("price") or 0)
@@ -371,7 +424,7 @@ class SyncEngine:
         return get_inventory_by_id(item_id) or {"id": item_id, **payload}
 
     def _start_sync_run(self, store_id: int, *, run_type: str) -> int:
-        now = datetime.datetime.utcnow().isoformat()
+        now = datetime.datetime.now(datetime.UTC).isoformat()
         with get_inventory_db() as conn:
             cur = conn.execute(
                 """
@@ -397,7 +450,7 @@ class SyncEngine:
         errors_count: int = 0,
         last_error: Optional[str] = None,
     ) -> None:
-        now = datetime.datetime.utcnow().isoformat()
+        now = datetime.datetime.now(datetime.UTC).isoformat()
         with get_inventory_db() as conn:
             conn.execute(
                 """
@@ -453,7 +506,9 @@ class SyncEngine:
             "images": product.get("images"),
         }
 
-    def _decide_sync(self, local: Dict[str, Any], woo: Dict[str, Any], *, strategy: str) -> str:
+    def _decide_sync(
+        self, local: Dict[str, Any], woo: Dict[str, Any], *, strategy: str
+    ) -> str:
         if strategy == "woo":
             return "pull" if self._values_differ(local, woo) else "noop"
         if strategy == "local":
@@ -469,23 +524,29 @@ class SyncEngine:
         return "noop"
 
     def _values_differ(self, local: Dict[str, Any], woo: Dict[str, Any]) -> bool:
-        return local["quantity"] != woo["quantity"] or float(local["price_gel"]) != float(woo["price_gel"])
+        return local["quantity"] != woo["quantity"] or float(
+            local["price_gel"]
+        ) != float(woo["price_gel"])
 
     def _parse_local_ts(self, value: Any) -> Optional[datetime.datetime]:
         if not value:
             return None
         try:
-            return datetime.datetime.fromisoformat(str(value))
+            parsed = datetime.datetime.fromisoformat(str(value))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.UTC)
         except ValueError:
             return None
 
-    def _parse_woo_modified(self, product: Dict[str, Any]) -> Optional[datetime.datetime]:
+    def _parse_woo_modified(
+        self, product: Dict[str, Any]
+    ) -> Optional[datetime.datetime]:
         value = product.get("date_modified_gmt") or product.get("date_modified")
         if not value:
             return None
         text = str(value).replace("Z", "+00:00")
         try:
-            return datetime.datetime.fromisoformat(text)
+            parsed = datetime.datetime.fromisoformat(text)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.UTC)
         except ValueError:
             return None
 
@@ -508,14 +569,18 @@ class SyncEngine:
 
     def _local_rev_matches(self, internal_id: int, expected_rev: int) -> bool:
         with get_inventory_db() as conn:
-            cur = conn.execute("SELECT local_rev FROM inventory WHERE id = ?", (internal_id,))
+            cur = conn.execute(
+                "SELECT local_rev FROM inventory WHERE id = ?", (internal_id,)
+            )
             row = cur.fetchone()
             if not row:
                 return False
             return int(row["local_rev"] or 0) == expected_rev
 
     @contextmanager
-    def _acquire_item_lock(self, store_id: int, internal_product_id: int) -> Iterator[bool]:
+    def _acquire_item_lock(
+        self, store_id: int, internal_product_id: int
+    ) -> Iterator[bool]:
         key = (store_id, internal_product_id)
         with _LOCKS_GUARD:
             lock = _LOCKS.setdefault(key, threading.Lock())
@@ -529,7 +594,7 @@ class SyncEngine:
             lock.release()
 
     def _acquire_db_lock(self, store_id: int, internal_product_id: int) -> bool:
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.UTC)
         stale_before = now - datetime.timedelta(seconds=self.lock_ttl_seconds)
         now_str = now.isoformat()
         with get_inventory_db() as conn:
@@ -542,6 +607,8 @@ class SyncEngine:
                 locked_at = row["locked_at"]
                 try:
                     locked_ts = datetime.datetime.fromisoformat(str(locked_at))
+                    if locked_ts.tzinfo is None:
+                        locked_ts = locked_ts.replace(tzinfo=datetime.UTC)
                 except ValueError:
                     locked_ts = now
                 if locked_ts < stale_before:
@@ -589,7 +656,9 @@ class SyncEngine:
             "errors_count": 0,
         }
 
-    def _filter_incoming_updates(self, woo_snapshot: Dict[str, Any], allowed_fields: set[str]) -> Dict[str, Any]:
+    def _filter_incoming_updates(
+        self, woo_snapshot: Dict[str, Any], allowed_fields: set[str]
+    ) -> Dict[str, Any]:
         updates: Dict[str, Any] = {}
         if "quantity" in allowed_fields and "quantity" not in NEVER_ACCEPT_FIELDS:
             updates["quantity"] = woo_snapshot["quantity"]
@@ -598,7 +667,11 @@ class SyncEngine:
         if "description" in allowed_fields and "description" not in NEVER_ACCEPT_FIELDS:
             updates["description"] = woo_snapshot.get("description")
         if "images" in allowed_fields and "images" not in NEVER_ACCEPT_FIELDS:
-            image = (woo_snapshot.get("images") or [{}])[0].get("src") if woo_snapshot.get("images") else None
+            image = (
+                (woo_snapshot.get("images") or [{}])[0].get("src")
+                if woo_snapshot.get("images")
+                else None
+            )
             if image:
                 updates["cover_url"] = image
         return updates

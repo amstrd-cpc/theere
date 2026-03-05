@@ -115,7 +115,7 @@ def get_or_create_supplier(name: str) -> int:
 def insert_inventory(item: Dict[str, Any]) -> int:
     ensure_inventory_sequence()
     with get_inventory_db() as conn:
-        now = item.get("created_at") or datetime.datetime.utcnow().isoformat()
+        now = item.get("created_at") or datetime.datetime.now(datetime.UTC).isoformat()
         cur = conn.execute(
             """
             INSERT INTO inventory (
@@ -154,7 +154,7 @@ def insert_inventory(item: Dict[str, Any]) -> int:
 def insert_inventory_with_id(item_id: int, item: Dict[str, Any]) -> int:
     ensure_inventory_sequence()
     with get_inventory_db() as conn:
-        now = item.get("created_at") or datetime.datetime.utcnow().isoformat()
+        now = item.get("created_at") or datetime.datetime.now(datetime.UTC).isoformat()
         conn.execute(
             """
             INSERT INTO inventory (
@@ -203,7 +203,7 @@ def update_inventory_sync(item_id: int, woo_product_id: int, sync_hash: str) -> 
             SET woo_product_id = ?, woo_synced = 1, woo_last_synced_at = ?, woo_sync_hash = ?
             WHERE id = ?
             """,
-            (woo_product_id, datetime.datetime.utcnow().isoformat(), sync_hash, item_id),
+            (woo_product_id, datetime.datetime.now(datetime.UTC).isoformat(), sync_hash, item_id),
         )
         conn.commit()
 
@@ -377,7 +377,7 @@ def log_inventory_event(
     correlation_id: Optional[str] = None,
     note: Optional[str] = None,
 ) -> None:
-    ts = datetime.datetime.utcnow().isoformat()
+    ts = datetime.datetime.now(datetime.UTC).isoformat()
     with get_inventory_db() as conn:
         conn.execute(
             """
@@ -439,7 +439,7 @@ def update_inventory_fields(
             old_qty = int(row["quantity"] or 0)
             old_price = float(row["price_gel"] or 0)
             local_rev = int(row["local_rev"] or 0)
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     keys = sorted(fields.keys())
     assignments = ", ".join(f"{key} = ?" for key in keys)
     values = [fields[key] for key in keys]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -51,13 +52,31 @@ def _parse_optional_int(raw: Optional[str]) -> Optional[int]:
         return None
 
 
+def _validate_bot_password(password: str) -> None:
+    if not password:
+        raise ValueError("BOT_PASSWORD is required and must not be empty.")
+    if len(password) < 12:
+        raise ValueError("BOT_PASSWORD must be at least 12 characters long.")
+    if password.lower() in {"password", "changeme", "your_default_password_here"}:
+        raise ValueError("BOT_PASSWORD uses an insecure default value.")
+    if not re.search(r"[A-Z]", password) or not re.search(r"[a-z]", password):
+        raise ValueError("BOT_PASSWORD must contain upper and lower case letters.")
+    if not re.search(r"\d", password):
+        raise ValueError("BOT_PASSWORD must contain at least one digit.")
+
+
 def load_settings() -> Settings:
     bot_token = os.getenv("BOT_TOKEN", "").strip()
     admin_chat_id = os.getenv("ADMIN_CHAT_ID")
     admin_ids = _parse_int_list(os.getenv("ADMIN_IDS"))
-    bot_password = os.getenv("BOT_PASSWORD", "your_default_password_here")
+    bot_password = os.getenv("BOT_PASSWORD", "").strip()
+    _validate_bot_password(bot_password)
     session_timeout_hours = int(os.getenv("SESSION_TIMEOUT_HOURS", "24"))
-    wc_verify_ssl = os.getenv("WC_VERIFY_SSL", "true").lower() not in {"0", "false", "no"}
+    wc_verify_ssl = os.getenv("WC_VERIFY_SSL", "true").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
     db_path = os.getenv("RECORDSTORE_DB_FILE") or os.getenv("DB_PATH")
     if not db_path:
         data_dir = Path("/data")
@@ -72,7 +91,12 @@ def load_settings() -> Settings:
     api_base_url = os.getenv("API_BASE_URL")
     webhook_port = int(os.getenv("WEBHOOK_PORT", "8080"))
     default_store_id = _parse_optional_int(os.getenv("DEFAULT_STORE_ID"))
-    nav_router_enabled = os.getenv("NAV_ROUTER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    nav_router_enabled = os.getenv("NAV_ROUTER_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     return Settings(
         bot_token=bot_token,
